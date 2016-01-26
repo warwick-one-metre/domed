@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+#
+# This file is part of domed.
+#
+# domed is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# domed is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with domed.  If not, see <http://www.gnu.org/licenses/>.
+
+"""Dome daemon for the Warwick one-metre telescope"""
+
+# pylint: disable=too-few-public-methods
+# pylint: disable=too-many-instance-attributes
+
+import datetime
+import threading
+import time
+
+import Pyro4
+import serial
+
+PYRO_HOST = 'localhost'
+PYRO_PORT = 9004
+
+class DomeShutterStatus:
+    """Status of the dome shutters"""
+    Closed, Open, PartiallyOpen, Opening, Closing = range(5)
+
+class DomeDaemon:
+    """Daemon class that wraps the RS232 interface"""
+    SERIAL_PORT = '/dev/ttyACM0'
+    SERIAL_BAUD = 9600
+    SERIAL_TIMEOUT = 3
+
+    def __init__(self):
+        self._last_error_lock = threading.Lock()
+        self._last_error_time = None
+        self._last_error_message = None
+        self._port = None
+
+        self._status_lock = threading.Lock()
+        self._status_time = None
+        self._east_shutter = DomeShutterStatus.Closed
+        self._west_shutter = DomeShutterStatus.Closed
+
+        runloop = threading.Thread(target=self.__monitor_dome_status)
+        runloop.daemon = True
+        runloop.start()
+
+    # pylint: disable=broad-except
+    def __monitor_dome_status(self):
+        """Monitors the status of the dome by reading serial port"""
+        while True:
+            # Initial setup
+            try:
+                self._port = serial.Serial(DomeDaemon.SERIAL_PORT,
+                                           DomeDaemon.SERIAL_BAUD,
+                                           timeout=DomeDaemon.SERIAL_TIMEOUT)
+            except Exception as exception:
+                print(exception)
+                print('Will retry in 5 seconds...')
+                with self._last_error_lock:
+                    self._last_error_message = str(exception)
+                    self._last_error_time = datetime.datetime.utcnow()
+                time.sleep(5.)
+                continue
+
+            try:
+                print('Connected to', DomeDaemon.SERIAL_PORT)
+
+                # Flush any stale state
+                self._port.flushInput()
+                self._port.flushOutput()
+
+                # Main run loop
+                while True:
+                    data = self._port.read(1)
+
+                    if len(data) == 0:
+                        raise serial.SerialTimeoutException("Read timeout")
+
+                    with self._status_lock:
+                        self.__parse_status(data[0])
+                        self._status_time = datetime.datetime.utcnow()
+            except Exception as exception:
+                self._port.close()
+                with self._last_error_lock:
+                    self._last_error_message = str(exception)
+                    self._last_error_time = datetime.datetime.utcnow()
+
+                print(exception)
+                print('Will retry in 5 seconds...')
+                time.sleep(5.)
+    # pylint: enable=broad-except
+
+    def __parse_status(self, status):
+    # pylint: disable=too-many-branches
+        if status == ord('0'):
+            self._east_shutter = DomeShutterStatus.Closed
+            self._west_shutter = DomeShutterStatus.Closed
+        elif status == ord('1'):
+            if self._east_shutter != DomeShutterStatus.Open:
+                self._east_shutter = DomeShutterStatus.PartiallyOpen
+            self._west_shutter = DomeShutterStatus.Closed
+        elif status == ord('2'):
+            self._east_shutter = DomeShutterStatus.Closed
+            if self._west_shutter != DomeShutterStatus.Open:
+                self._west_shutter = DomeShutterStatus.PartiallyOpen
+        elif status == ord('3'):
+            if self._east_shutter != DomeShutterStatus.Open:
+                self._east_shutter = DomeShutterStatus.PartiallyOpen
+            if self._west_shutter != DomeShutterStatus.Open:
+                self._west_shutter = DomeShutterStatus.PartiallyOpen
+        elif status == ord('A'):
+            self._east_shutter = DomeShutterStatus.Closing
+        elif status == ord('a'):
+            self._east_shutter = DomeShutterStatus.Opening
+        elif status == ord('X'):
+            self._east_shutter = DomeShutterStatus.Closed
+        elif status == ord('x'):
+            self._east_shutter = DomeShutterStatus.Open
+        elif status == ord('B'):
+            self._west_shutter = DomeShutterStatus.Closing
+        elif status == ord('b'):
+            self._west_shutter = DomeShutterStatus.Opening
+        elif status == ord('Y'):
+            self._west_shutter = DomeShutterStatus.Closed
+        elif status == ord('y'):
+            self._west_shutter = DomeShutterStatus.Open
+        else:
+            with self._last_error_lock:
+                self._last_error_message = "Unknown status code: {0}".format(status)
+                self._last_error_time = datetime.datetime.utcnow()
+    # pylint: enable=too-many-branches
+
+    @Pyro4.expose
+    def status(self):
+        """Query the latest status."""
+        with self._status_lock:
+            date = self._status_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+            return (date, self._east_shutter, self._west_shutter)
+
+    @Pyro4.expose
+    def last_error(self):
+        """Query the latest error time and message"""
+        with self._last_error_lock:
+            return (self._last_error_time, self._last_error_message)
+
+def spawn_daemon():
+    """Spawns the daemon and registers it with Pyro"""
+    Pyro4.config.COMMTIMEOUT = 5
+    Pyro4.config.REQUIRE_EXPOSE = True
+
+    pyro = Pyro4.Daemon(host=PYRO_HOST, port=PYRO_PORT)
+    dome = DomeDaemon()
+    uri = pyro.register(dome, objectId='dome_daemon')
+
+    print('Starting dome daemon with Pyro ID:', uri)
+    pyro.requestLoop()
+    print('Stopping dome daemon with Pyro ID:', uri)
+
+if __name__ == '__main__':
+    spawn_daemon()
