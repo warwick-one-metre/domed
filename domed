@@ -30,9 +30,38 @@ import serial
 PYRO_HOST = 'localhost'
 PYRO_PORT = 9004
 
+# Maximum time it should take for the shutters to fully open or close
+SHUTTER_TIMEOUT = datetime.timedelta(seconds=60)
+
+# Delay between sending command bytes
+COMMAND_DELAY = 0.5
+
+# This should be kept in sync with the dictionary in dome
+class CommandStatus:
+    """Numeric return codes"""
+    # General error codes
+    Succeeded = 0
+    Failed = 1
+    Blocked = 2
+
 class DomeShutterStatus:
     """Status of the dome shutters"""
     Closed, Open, PartiallyOpen, Opening, Closing = range(5)
+
+class TryLock(object):
+    """Helper object for use with `with` statements"""
+    def __init__(self, lock):
+        self._lock = lock
+        self._locked = False
+
+    def __enter__(self):
+        self._locked = self._lock.acquire(False)
+        return self._locked
+
+    def __exit__(self, *args):
+        if self._locked:
+            self._lock.release()
+            self._locked = False
 
 class DomeDaemon:
     """Daemon class that wraps the RS232 interface"""
@@ -50,6 +79,9 @@ class DomeDaemon:
         self._status_time = None
         self._east_shutter = DomeShutterStatus.Closed
         self._west_shutter = DomeShutterStatus.Closed
+
+        self._command_lock = threading.Lock()
+        self._force_stopped = False
 
         runloop = threading.Thread(target=self.__monitor_dome_status)
         runloop.daemon = True
@@ -85,11 +117,12 @@ class DomeDaemon:
                     data = self._port.read(1)
 
                     if len(data) == 0:
-                        raise serial.SerialTimeoutException("Read timeout")
+                        raise serial.SerialTimeoutException('Read timeout')
 
                     with self._status_lock:
                         self.__parse_status(data[0])
                         self._status_time = datetime.datetime.utcnow()
+
             except Exception as exception:
                 self._port.close()
                 with self._last_error_lock:
@@ -137,9 +170,93 @@ class DomeDaemon:
             self._west_shutter = DomeShutterStatus.Open
         else:
             with self._last_error_lock:
-                self._last_error_message = "Unknown status code: {0}".format(status)
+                self._last_error_message = 'Unknown status code: {0}'.format(status)
                 self._last_error_time = datetime.datetime.utcnow()
     # pylint: enable=too-many-branches
+
+    def __move_shutter(self, command, at_requested_limit):
+        """Issues a dome command and blocks until the final state is reached (or timeout)"""
+
+        starttime = datetime.datetime.utcnow()
+        while True:
+            # pylint: disable=broad-except
+            try:
+                length = self._port.write(command.encode('ascii'))
+                if length != 1:
+                    raise serial.SerialException('Failed to send command ' + command)
+            except Exception as exception:
+                with self._last_error_lock:
+                    self._last_error_message = str(exception)
+                    self._last_error_time = datetime.datetime.utcnow()
+            # pylint: enable=broad-except
+            time.sleep(COMMAND_DELAY)
+            timedout = datetime.datetime.utcnow() - starttime > SHUTTER_TIMEOUT
+            if at_requested_limit() or self._force_stopped or timedout:
+                break
+        return not self._force_stopped and at_requested_limit()
+
+    @Pyro4.expose
+    def open_east_shutter(self):
+        """Opens the east shutter.
+           Returns when the shutter reaches the open limit or command times out."""
+        with TryLock(self._command_lock) as success:
+            if not success:
+                return CommandStatus.Blocked
+
+            at_requested_limit = lambda: self._east_shutter == DomeShutterStatus.Open
+            if not self.__move_shutter('a', at_requested_limit):
+                return CommandStatus.Failed
+            return CommandStatus.Succeeded
+
+    @Pyro4.expose
+    def close_east_shutter(self):
+        """Closes the east shutter.
+           Returns when the shutter reaches the open limit or command times out."""
+        with TryLock(self._command_lock) as success:
+            if not success:
+                return CommandStatus.Blocked
+
+            at_requested_limit = lambda: self._east_shutter == DomeShutterStatus.Closed
+            if not self.__move_shutter('A', at_requested_limit):
+                return CommandStatus.Failed
+            return CommandStatus.Succeeded
+
+    @Pyro4.expose
+    def open_west_shutter(self):
+        """Opens the west shutter.
+           Returns when the shutter reaches the open limit or command times out."""
+        with TryLock(self._command_lock) as success:
+            if not success:
+                return CommandStatus.Blocked
+
+            at_requested_limit = lambda: self._west_shutter == DomeShutterStatus.Open
+            if not self.__move_shutter('b', at_requested_limit):
+                return CommandStatus.Failed
+            return CommandStatus.Succeeded
+
+    @Pyro4.expose
+    def close_west_shutter(self):
+        """Closes the west shutter.
+           Returns when the shutter reaches the open limit or command times out."""
+        with TryLock(self._command_lock) as success:
+            if not success:
+                return CommandStatus.Blocked
+
+            at_requested_limit = lambda: self._west_shutter == DomeShutterStatus.Closed
+            if not self.__move_shutter('B', at_requested_limit):
+                return CommandStatus.Failed
+            return CommandStatus.Succeeded
+
+    @Pyro4.expose
+    def stop(self):
+        """Stops any active shutter movement"""
+
+        # The stop command overrides all other commands
+        self._force_stopped = True
+        with self._command_lock:
+            self._force_stopped = False
+
+        return CommandStatus.Succeeded
 
     @Pyro4.expose
     def status(self):
