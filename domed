@@ -43,6 +43,8 @@ class CommandStatus:
     Succeeded = 0
     Failed = 1
     Blocked = 2
+    HeartbeatTimedOut = 3
+    HeartbeatCloseInProgress = 4
 
 class DomeShutterStatus:
     """Status of the dome shutters"""
@@ -83,9 +85,18 @@ class DomeDaemon:
         self._command_lock = threading.Lock()
         self._force_stopped = False
 
+        self._heartbeat_last_ping = datetime.datetime.min
+        self._heartbeat_timeout = 0
+        self._heartbeat_time_remaining = 0
+        self._heartbeat_closing_dome = False
+
         runloop = threading.Thread(target=self.__monitor_dome_status)
         runloop.daemon = True
         runloop.start()
+
+        heartbeat = threading.Thread(target=self.__monitor_heartbeat)
+        heartbeat.daemon = True
+        heartbeat.start()
 
     # pylint: disable=broad-except
     def __monitor_dome_status(self):
@@ -134,6 +145,35 @@ class DomeDaemon:
                 time.sleep(5.)
     # pylint: enable=broad-except
 
+    def __monitor_heartbeat(self):
+        """Monitors the heartbeat timer and close the dome if it expires"""
+        while True:
+            if self._heartbeat_timeout > 0:
+                delta = datetime.datetime.utcnow() - self._heartbeat_last_ping
+                self._heartbeat_time_remaining = self._heartbeat_timeout - delta.total_seconds()
+                if self._heartbeat_time_remaining < 0 and \
+                        (self._east_shutter != DomeShutterStatus.Closed or
+                         self._west_shutter != DomeShutterStatus.Closed):
+                    self._heartbeat_time_remaining = 0
+
+                    # Force-stop any active movements
+                    self._heartbeat_closing_dome = True
+                    if self._east_shutter == DomeShutterStatus.Opening or \
+                            self._east_shutter == DomeShutterStatus.Closing:
+                        self._east_shutter = DomeShutterStatus.PartiallyOpen
+                    if self._west_shutter == DomeShutterStatus.Opening or \
+                            self._west_shutter == DomeShutterStatus.Closing:
+                        self._west_shutter = DomeShutterStatus.PartiallyOpen
+
+                    # TODO: Check the wind direction and close the upwind shutter first
+                    at_requested_limit = lambda: self._east_shutter == DomeShutterStatus.Closed
+                    self.__move_shutter('A', at_requested_limit, ignore_heartbeat=True)
+                    at_requested_limit = lambda: self._west_shutter == DomeShutterStatus.Closed
+                    self.__move_shutter('B', at_requested_limit, ignore_heartbeat=True)
+                    self._heartbeat_closing_dome = False
+
+            time.sleep(1.)
+
     def __parse_status(self, status):
     # pylint: disable=too-many-branches
         if status == ord('0'):
@@ -174,7 +214,7 @@ class DomeDaemon:
                 self._last_error_time = datetime.datetime.utcnow()
     # pylint: enable=too-many-branches
 
-    def __move_shutter(self, command, at_requested_limit):
+    def __move_shutter(self, command, at_requested_limit, ignore_heartbeat=False):
         """Issues a dome command and blocks until the final state is reached (or timeout)"""
 
         starttime = datetime.datetime.utcnow()
@@ -191,14 +231,21 @@ class DomeDaemon:
             # pylint: enable=broad-except
             time.sleep(COMMAND_DELAY)
             timedout = datetime.datetime.utcnow() - starttime > SHUTTER_TIMEOUT
-            if at_requested_limit() or self._force_stopped or timedout:
+            heartbeat = not ignore_heartbeat and self._heartbeat_closing_dome
+            if self._force_stopped or timedout or heartbeat or at_requested_limit():
                 break
-        return not self._force_stopped and at_requested_limit()
+        return not self._force_stopped and not heartbeat and at_requested_limit()
 
     @Pyro4.expose
     def open_east_shutter(self):
         """Opens the east shutter.
            Returns when the shutter reaches the open limit or command times out."""
+        if self._heartbeat_closing_dome:
+            return CommandStatus.HeartbeatCloseInProgress
+
+        if self._heartbeat_timeout > 0 and self._heartbeat_time_remaining <= 0:
+            return CommandStatus.HeartbeatTimedOut
+
         with TryLock(self._command_lock) as success:
             if not success:
                 return CommandStatus.Blocked
@@ -212,6 +259,12 @@ class DomeDaemon:
     def close_east_shutter(self):
         """Closes the east shutter.
            Returns when the shutter reaches the open limit or command times out."""
+        if self._heartbeat_closing_dome:
+            return CommandStatus.HeartbeatCloseInProgress
+
+        if self._heartbeat_timeout > 0 and self._heartbeat_time_remaining <= 0:
+            return CommandStatus.HeartbeatTimedOut
+
         with TryLock(self._command_lock) as success:
             if not success:
                 return CommandStatus.Blocked
@@ -225,6 +278,12 @@ class DomeDaemon:
     def open_west_shutter(self):
         """Opens the west shutter.
            Returns when the shutter reaches the open limit or command times out."""
+        if self._heartbeat_closing_dome:
+            return CommandStatus.HeartbeatCloseInProgress
+
+        if self._heartbeat_timeout > 0 and self._heartbeat_time_remaining <= 0:
+            return CommandStatus.HeartbeatTimedOut
+
         with TryLock(self._command_lock) as success:
             if not success:
                 return CommandStatus.Blocked
@@ -238,6 +297,12 @@ class DomeDaemon:
     def close_west_shutter(self):
         """Closes the west shutter.
            Returns when the shutter reaches the open limit or command times out."""
+        if self._heartbeat_closing_dome:
+            return CommandStatus.HeartbeatCloseInProgress
+
+        if self._heartbeat_timeout > 0 and self._heartbeat_time_remaining <= 0:
+            return CommandStatus.HeartbeatTimedOut
+
         with TryLock(self._command_lock) as success:
             if not success:
                 return CommandStatus.Blocked
@@ -250,6 +315,8 @@ class DomeDaemon:
     @Pyro4.expose
     def stop(self):
         """Stops any active shutter movement"""
+        if self._heartbeat_closing_dome:
+            return CommandStatus.HeartbeatCloseInProgress
 
         # The stop command overrides all other commands
         self._force_stopped = True
@@ -259,11 +326,26 @@ class DomeDaemon:
         return CommandStatus.Succeeded
 
     @Pyro4.expose
+    def ping_heartbeat(self):
+        """Reset the auto-close countdown"""
+        self._heartbeat_last_ping = datetime.datetime.utcnow()
+        return CommandStatus.Succeeded
+
+    @Pyro4.expose
+    def configure_heartbeat(self, timeout):
+        """Enable or disable the auto-close countdown"""
+        self._heartbeat_timeout = timeout
+        self._heartbeat_time_remaining = timeout
+        self._heartbeat_last_ping = datetime.datetime.utcnow()
+        return CommandStatus.Succeeded
+
+    @Pyro4.expose
     def status(self):
         """Query the latest status."""
         with self._status_lock:
             date = self._status_time.strftime('%Y-%m-%dT%H:%M:%SZ')
-            return (date, self._east_shutter, self._west_shutter)
+            return (date, self._east_shutter, self._west_shutter,
+                    self._heartbeat_timeout, self._heartbeat_time_remaining)
 
     @Pyro4.expose
     def last_error(self):

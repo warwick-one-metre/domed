@@ -45,6 +45,8 @@ STATUS_CODES = {
     # General error codes
     1: 'error: command failed',
     2: 'error: another command is already running',
+    3: 'error: heartbeat timeout has expired',
+    4: 'error: heartbeat timeout is closing the dome',
 
     # tel specific codes
     -100: 'error: terminated by user',
@@ -80,9 +82,16 @@ def print_status():
         error = domed.last_error()
 
     date = datetime.datetime.strptime(status[0], '%Y-%m-%dT%H:%M:%SZ')
+    if status[3] > 0:
+        heartbeat_status = str(round(status[4])) if status[4] > 0 else FMT_RED + 'EXPIRED'
+        heartbeat_status += ' / ' + str(status[3])
+    else:
+        heartbeat_status = 'DISABLED'
+
     print('Dome status at: {0}'.format(FMT_BOLD + str(date) + FMT_CLEAR))
     print('  East shutter: {}'.format(STATUS_DESCRIPTIONS[status[1]]))
     print('  West shutter: {}'.format(STATUS_DESCRIPTIONS[status[2]]))
+    print('     Heartbeat: ' + FMT_BOLD + heartbeat_status + FMT_CLEAR)
 
     if error[0] is not None:
         print('Last error was at {}'.format(error[0]))
@@ -121,13 +130,34 @@ def close_dome(args):
     print('usage: {} close (east|west)'.format(SCRIPT_NAME))
     return -1
 
+def heartbeat(args):
+    """Configure the dome close heartbeat"""
+    if len(args) > 0:
+        if args[0] == 'ping':
+            with Pyro4.Proxy(DAEMON_URI) as domed:
+                return domed.ping_heartbeat()
+        if args[0] == 'disable':
+            with Pyro4.Proxy(DAEMON_URI) as domed:
+                return domed.configure_heartbeat(0)
+        if args[0] == 'enable':
+            if len(args) > 1:
+                timeout = int(args[1])
+                if timeout > 0:
+                    with Pyro4.Proxy(DAEMON_URI) as domed:
+                        return domed.configure_heartbeat(timeout)
+            print('usage: {} heartbeat enable <timeout in seconds>'.format(SCRIPT_NAME))
+            return -1
+    print('usage: {} heartbeat (disable|enable|ping)'.format(SCRIPT_NAME))
+    return -1
+
 def print_usage(name):
     """Prints the utility help"""
     print('Usage: {} <command>'.format(name))
     print()
-    print('   status    print a human-readable summary of the dome status')
-    print('   open      open one or both shutters')
-    print('   close     close one or both shutters')
+    print('   status      print a human-readable summary of the dome status')
+    print('   open        open one or both shutters')
+    print('   close       close one or both shutters')
+    print('   heartbeat   configure the dome auto-close timeout')
     print()
 
     return 1
@@ -142,6 +172,8 @@ if __name__ == '__main__':
         run_command(lambda: open_dome(sys.argv[2:]))
     elif sys.argv[1] == 'close':
         run_command(lambda: close_dome(sys.argv[2:]))
+    elif sys.argv[1] == 'heartbeat':
+        run_command(lambda: heartbeat(sys.argv[2:]))
 
     # Command not found
     sys.exit(print_usage(SCRIPT_NAME))
