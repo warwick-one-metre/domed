@@ -48,7 +48,7 @@ STATUS_CODES = {
     3: 'error: heartbeat timeout has expired',
     4: 'error: heartbeat timeout is closing the dome',
 
-    # tel specific codes
+    # dome specific codes
     -100: 'error: terminated by user',
     -101: 'error: unable to communicate with dome daemon'
 }
@@ -109,12 +109,15 @@ def open_dome(args):
     if len(args) > 0:
         if args[0] == 'east':
             with Pyro4.Proxy(DAEMON_URI) as domed:
-                return domed.open_east_shutter()
+                return domed.open_shutters(east=True)
         if args[0] == 'west':
             with Pyro4.Proxy(DAEMON_URI) as domed:
-                return domed.open_west_shutter()
+                return domed.open_shutters(west=True)
+        if args[0] == 'both':
+            with Pyro4.Proxy(DAEMON_URI) as domed:
+                return domed.open_shutters(east=True, west=True)
 
-    print('usage: {} open (east|west)'.format(SCRIPT_NAME))
+    print('usage: {} open (east|west|both)'.format(SCRIPT_NAME))
     return -1
 
 def close_dome(args):
@@ -122,12 +125,15 @@ def close_dome(args):
     if len(args) > 0:
         if args[0] == 'east':
             with Pyro4.Proxy(DAEMON_URI) as domed:
-                return domed.close_east_shutter()
+                return domed.close_shutters(east=True)
         if args[0] == 'west':
             with Pyro4.Proxy(DAEMON_URI) as domed:
-                return domed.close_west_shutter()
+                return domed.close_shutters(west=True)
+        if args[0] == 'both':
+            with Pyro4.Proxy(DAEMON_URI) as domed:
+                return domed.close_shutters(east=True, west=True)
 
-    print('usage: {} close (east|west)'.format(SCRIPT_NAME))
+    print('usage: {} close (east|west|both)'.format(SCRIPT_NAME))
     return -1
 
 def heartbeat(args):
