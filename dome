@@ -169,6 +169,7 @@ def print_usage(name):
     print('   status      print a human-readable summary of the dome status')
     print('   open        open one or both shutters')
     print('   close       close one or both shutters')
+    print('   stop        stop manual open/close command (excludes heartbeat)')
     print('   heartbeat   configure the dome auto-close timeout')
     print('   access      raise the east shutter to provide hatch access')
     print()
@@ -185,6 +186,8 @@ if __name__ == '__main__':
         run_command(lambda: open_dome(sys.argv[2:]))
     elif sys.argv[1] == 'close':
         run_command(lambda: close_dome(sys.argv[2:]))
+    elif sys.argv[1] == 'stop':
+        run_command(stop)
     elif sys.argv[1] == 'heartbeat':
         run_command(lambda: heartbeat(sys.argv[2:]))
     elif sys.argv[1] == 'access':
