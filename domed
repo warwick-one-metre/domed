@@ -155,13 +155,13 @@ class DomeDaemon:
             self._east_shutter = DomeShutterStatus.Closed
             self._west_shutter = DomeShutterStatus.Closed
         elif status == ord('1'):
-            if self._east_shutter != DomeShutterStatus.Open:
-                self._east_shutter = DomeShutterStatus.PartiallyOpen
-            self._west_shutter = DomeShutterStatus.Closed
-        elif status == ord('2'):
             self._east_shutter = DomeShutterStatus.Closed
             if self._west_shutter != DomeShutterStatus.Open:
                 self._west_shutter = DomeShutterStatus.PartiallyOpen
+        elif status == ord('2'):
+            if self._east_shutter != DomeShutterStatus.Open:
+                self._east_shutter = DomeShutterStatus.PartiallyOpen
+            self._west_shutter = DomeShutterStatus.Closed
         elif status == ord('3'):
             if self._east_shutter != DomeShutterStatus.Open:
                 self._east_shutter = DomeShutterStatus.PartiallyOpen
