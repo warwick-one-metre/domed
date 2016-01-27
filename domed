@@ -36,6 +36,9 @@ SHUTTER_TIMEOUT = datetime.timedelta(seconds=60)
 # Delay between sending command bytes
 COMMAND_DELAY = 0.5
 
+# Length of time to close the east shutter to clear the hatch
+HATCH_ACCESS_CLOSE_TIME = datetime.timedelta(seconds=15)
+
 # This should be kept in sync with the dictionary in dome
 class CommandStatus:
     """Numeric return codes"""
@@ -45,6 +48,7 @@ class CommandStatus:
     Blocked = 2
     HeartbeatTimedOut = 3
     HeartbeatCloseInProgress = 4
+    EastShutterMustBeFullyOpen = 10
 
 class DomeShutterStatus:
     """Status of the dome shutters"""
@@ -225,13 +229,14 @@ class DomeDaemon:
                     self._last_error_time = datetime.datetime.utcnow()
             # pylint: enable=broad-except
             time.sleep(COMMAND_DELAY)
-            timedout = datetime.datetime.utcnow() - starttime > SHUTTER_TIMEOUT
+            runtime = datetime.datetime.utcnow() - starttime
             stopped = not force_close and self._force_stopped
             heartbeat = not force_close and self._heartbeat_closing_dome
-            if stopped or timedout or heartbeat or at_requested_limit():
+            at_limit = at_requested_limit(runtime)
+            if stopped or heartbeat or at_limit or runtime > SHUTTER_TIMEOUT:
                 break
 
-        return not stopped and not heartbeat and at_requested_limit()
+        return not stopped and not heartbeat and at_limit
 
     def __open_shutters(self, east, west, force=False):
         """Open the requested shutters"""
@@ -239,11 +244,11 @@ class DomeDaemon:
 
         # TODO: Check the wind direction and open the downwind shutter first
         if east:
-            at_requested_limit = lambda: self._east_shutter == DomeShutterStatus.Open
+            at_requested_limit = lambda runtime: self._east_shutter == DomeShutterStatus.Open
             success = success and self.__move_shutter('a', at_requested_limit, force)
 
         if west:
-            at_requested_limit = lambda: self._west_shutter == DomeShutterStatus.Open
+            at_requested_limit = lambda runtime: self._west_shutter == DomeShutterStatus.Open
             success = success and self.__move_shutter('b', at_requested_limit, force)
         return success
 
@@ -253,11 +258,11 @@ class DomeDaemon:
 
         # TODO: Check the wind direction and close the upwind shutter first
         if east:
-            at_requested_limit = lambda: self._east_shutter == DomeShutterStatus.Closed
+            at_requested_limit = lambda runtime: self._east_shutter == DomeShutterStatus.Closed
             success = success and self.__move_shutter('A', at_requested_limit, force)
 
         if west:
-            at_requested_limit = lambda: self._west_shutter == DomeShutterStatus.Closed
+            at_requested_limit = lambda runtime: self._west_shutter == DomeShutterStatus.Closed
             success = success and self.__move_shutter('B', at_requested_limit, force)
         return success
 
@@ -325,6 +330,30 @@ class DomeDaemon:
         self._heartbeat_time_remaining = timeout
         self._heartbeat_last_ping = datetime.datetime.utcnow()
         return CommandStatus.Succeeded
+
+    @Pyro4.expose
+    def access_hatch(self):
+        """Closes the requested shutter.
+           Returns once the requested shutters reach their limits or the command times out."""
+        if self._heartbeat_closing_dome:
+            return CommandStatus.HeartbeatCloseInProgress
+
+        if self._heartbeat_timeout > 0 and self._heartbeat_time_remaining <= 0:
+            return CommandStatus.HeartbeatTimedOut
+
+        with TryLock(self._command_lock) as success:
+            if not success:
+                return CommandStatus.Blocked
+
+            if self._east_shutter != DomeShutterStatus.Open:
+                return CommandStatus.EastShutterMustBeFullyOpen
+
+            # Close the east shutter just enough to clear the hatch
+            at_requested_limit = lambda runtime: runtime > HATCH_ACCESS_CLOSE_TIME
+            if not self.__move_shutter('A', at_requested_limit, False):
+                return CommandStatus.Failed
+
+            return CommandStatus.Succeeded
 
     @Pyro4.expose
     def status(self):

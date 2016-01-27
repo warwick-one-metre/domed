@@ -47,6 +47,7 @@ STATUS_CODES = {
     2: 'error: another command is already running',
     3: 'error: heartbeat timeout has expired',
     4: 'error: heartbeat timeout is closing the dome',
+    10: 'error: east shutter must be fully open',
 
     # dome specific codes
     -100: 'error: terminated by user',
@@ -156,6 +157,11 @@ def heartbeat(args):
     print('usage: {} heartbeat (disable|enable|ping)'.format(SCRIPT_NAME))
     return -1
 
+def access_hatch():
+    """Raise the east shutter to provide hatch access"""
+    with Pyro4.Proxy(DAEMON_URI) as domed:
+        return domed.access_hatch()
+
 def print_usage(name):
     """Prints the utility help"""
     print('Usage: {} <command>'.format(name))
@@ -164,6 +170,7 @@ def print_usage(name):
     print('   open        open one or both shutters')
     print('   close       close one or both shutters')
     print('   heartbeat   configure the dome auto-close timeout')
+    print('   access      raise the east shutter to provide hatch access')
     print()
 
     return 1
@@ -180,6 +187,8 @@ if __name__ == '__main__':
         run_command(lambda: close_dome(sys.argv[2:]))
     elif sys.argv[1] == 'heartbeat':
         run_command(lambda: heartbeat(sys.argv[2:]))
+    elif sys.argv[1] == 'access':
+        run_command(access_hatch)
 
     # Command not found
     sys.exit(print_usage(SCRIPT_NAME))
