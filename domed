@@ -71,7 +71,7 @@ class TryLock(object):
 
 class DomeDaemon:
     """Daemon class that wraps the RS232 interface"""
-    SERIAL_PORT = '/dev/ttyACM0'
+    SERIAL_PORT = '/dev/ttyS0'
     SERIAL_BAUD = 9600
     SERIAL_TIMEOUT = 3
 

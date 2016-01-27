@@ -1,0 +1,12 @@
+[Unit]
+Description=Daemon for exposing the dome controller via Pyro.
+After=syslog.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env python3 -u /usr/bin/domed
+StandardOutput=syslog
+StandardError=syslog
+
+[Install]
+WantedBy=multi-user.target
