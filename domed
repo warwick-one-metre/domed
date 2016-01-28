@@ -27,7 +27,7 @@ import time
 import Pyro4
 import serial
 
-PYRO_HOST = 'localhost'
+PYRO_HOST = '192.168.0.102'
 PYRO_PORT = 9004
 
 # Maximum time it should take for the shutters to fully open or close

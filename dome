@@ -22,7 +22,7 @@ import os
 import sys
 import Pyro4
 
-DAEMON_URI = 'PYRO:dome_daemon@localhost:9004'
+DAEMON_URI = 'PYRO:dome_daemon@192.168.0.102:9004'
 SCRIPT_NAME = os.path.basename(sys.argv[0])
 
 FMT_GREEN = u'\033[92m'
