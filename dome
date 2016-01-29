@@ -22,7 +22,11 @@ import os
 import sys
 import Pyro4
 
-DAEMON_URI = 'PYRO:dome_daemon@192.168.0.102:9004'
+PYRO_HOST = '192.168.0.102'
+PYRO_PORT = 9004
+PYRO_NAME = 'dome_daemon'
+
+PYRO_URI = 'PYRO:' + PYRO_NAME + '@' + PYRO_HOST + ':' + str(PYRO_PORT)
 SCRIPT_NAME = os.path.basename(sys.argv[0])
 
 FMT_GREEN = u'\033[92m'
@@ -78,7 +82,7 @@ def run_command(command):
 def print_status():
     """Prints the dome status in human-readable form"""
     error = None
-    with Pyro4.Proxy(DAEMON_URI) as domed:
+    with Pyro4.Proxy(PYRO_URI) as domed:
         status = domed.status()
         error = domed.last_error()
 
@@ -102,20 +106,20 @@ def print_status():
 
 def stop():
     """Stops any active dome movement"""
-    with Pyro4.Proxy(DAEMON_URI) as domed:
+    with Pyro4.Proxy(PYRO_URI) as domed:
         return domed.stop()
 
 def open_dome(args):
     """Opens the dome shutters"""
     if len(args) > 0:
         if args[0] == 'east':
-            with Pyro4.Proxy(DAEMON_URI) as domed:
+            with Pyro4.Proxy(PYRO_URI) as domed:
                 return domed.open_shutters(east=True)
         if args[0] == 'west':
-            with Pyro4.Proxy(DAEMON_URI) as domed:
+            with Pyro4.Proxy(PYRO_URI) as domed:
                 return domed.open_shutters(west=True)
         if args[0] == 'both':
-            with Pyro4.Proxy(DAEMON_URI) as domed:
+            with Pyro4.Proxy(PYRO_URI) as domed:
                 return domed.open_shutters(east=True, west=True)
 
     print('usage: {} open (east|west|both)'.format(SCRIPT_NAME))
@@ -125,13 +129,13 @@ def close_dome(args):
     """Closes the dome shutters"""
     if len(args) > 0:
         if args[0] == 'east':
-            with Pyro4.Proxy(DAEMON_URI) as domed:
+            with Pyro4.Proxy(PYRO_URI) as domed:
                 return domed.close_shutters(east=True)
         if args[0] == 'west':
-            with Pyro4.Proxy(DAEMON_URI) as domed:
+            with Pyro4.Proxy(PYRO_URI) as domed:
                 return domed.close_shutters(west=True)
         if args[0] == 'both':
-            with Pyro4.Proxy(DAEMON_URI) as domed:
+            with Pyro4.Proxy(PYRO_URI) as domed:
                 return domed.close_shutters(east=True, west=True)
 
     print('usage: {} close (east|west|both)'.format(SCRIPT_NAME))
@@ -141,16 +145,16 @@ def heartbeat(args):
     """Configure the dome close heartbeat"""
     if len(args) > 0:
         if args[0] == 'ping':
-            with Pyro4.Proxy(DAEMON_URI) as domed:
+            with Pyro4.Proxy(PYRO_URI) as domed:
                 return domed.ping_heartbeat()
         if args[0] == 'disable':
-            with Pyro4.Proxy(DAEMON_URI) as domed:
+            with Pyro4.Proxy(PYRO_URI) as domed:
                 return domed.configure_heartbeat(0)
         if args[0] == 'enable':
             if len(args) > 1:
                 timeout = int(args[1])
                 if timeout > 0:
-                    with Pyro4.Proxy(DAEMON_URI) as domed:
+                    with Pyro4.Proxy(PYRO_URI) as domed:
                         return domed.configure_heartbeat(timeout)
             print('usage: {} heartbeat enable <timeout in seconds>'.format(SCRIPT_NAME))
             return -1
@@ -159,7 +163,7 @@ def heartbeat(args):
 
 def access_hatch():
     """Raise the east shutter to provide hatch access"""
-    with Pyro4.Proxy(DAEMON_URI) as domed:
+    with Pyro4.Proxy(PYRO_URI) as domed:
         return domed.access_hatch()
 
 def print_usage(name):
