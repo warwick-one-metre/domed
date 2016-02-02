@@ -1,0 +1,27 @@
+_dome()
+{
+    local cur prev opts
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+    opts="status open close stop heartbeat access"
+
+    case "${prev}" in
+        open)
+            opts="east west both"
+            ;;
+        close)
+            opts="east west both"
+            ;;
+        heartbeat)
+            opts="ping disable enable"
+            ;;
+        *)
+            ;;
+    esac
+
+    COMPREPLY=($(compgen -W "${opts}" -- ${cur}))
+    return 0
+}
+
+complete -F _dome dome
