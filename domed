@@ -19,16 +19,15 @@
 
 # pylint: disable=too-few-public-methods
 # pylint: disable=too-many-instance-attributes
+# pylint: disable=broad-except
 
 import datetime
 import threading
 import time
-
 import Pyro4
 import serial
-
-PYRO_HOST = '192.168.0.102'
-PYRO_PORT = 9004
+import warwick.observatory as observatory
+from warwick.observatory import TryLock
 
 # Maximum time it should take for the shutters to fully open or close
 SHUTTER_TIMEOUT = datetime.timedelta(seconds=60)
@@ -53,21 +52,6 @@ class CommandStatus:
 class DomeShutterStatus:
     """Status of the dome shutters"""
     Closed, Open, PartiallyOpen, Opening, Closing = range(5)
-
-class TryLock(object):
-    """Helper object for use with `with` statements"""
-    def __init__(self, lock):
-        self._lock = lock
-        self._locked = False
-
-    def __enter__(self):
-        self._locked = self._lock.acquire(False)
-        return self._locked
-
-    def __exit__(self, *args):
-        if self._locked:
-            self._lock.release()
-            self._locked = False
 
 class DomeDaemon:
     """Daemon class that wraps the RS232 interface"""
@@ -102,7 +86,6 @@ class DomeDaemon:
         heartbeat.daemon = True
         heartbeat.start()
 
-    # pylint: disable=broad-except
     def __monitor_dome_status(self):
         """Monitors the status of the dome by reading serial port"""
         while True:
@@ -117,6 +100,8 @@ class DomeDaemon:
                 with self._last_error_lock:
                     self._last_error_message = str(exception)
                     self._last_error_time = datetime.datetime.utcnow()
+                observatory.log.error('domed', 'Failed to connect to serial port (' \
+                                      + str(exception) + ')')
                 time.sleep(5.)
                 continue
 
@@ -146,8 +131,9 @@ class DomeDaemon:
 
                 print(exception)
                 print('Will retry in 5 seconds...')
+                observatory.log.error('domed', 'Failed to read serial port (' \
+                                      + str(exception) + ')')
                 time.sleep(5.)
-    # pylint: enable=broad-except
 
     def __parse_status(self, status):
     # pylint: disable=too-many-branches
@@ -209,16 +195,17 @@ class DomeDaemon:
                             self._west_shutter == DomeShutterStatus.Closing:
                         self._west_shutter = DomeShutterStatus.PartiallyOpen
 
+                    observatory.log.warning('domed', 'Heartbeat has timed out: force-closing dome')
+
                     self.__close_shutters(True, True, force=True)
                     self._heartbeat_closing_dome = False
-
+                    observatory.log.info('domed', 'Heartbeat force-close complete')
             time.sleep(1.)
 
     def __move_shutter(self, command, at_requested_limit, force_close):
         """Issues a dome command and blocks until the final state is reached (or timeout)"""
         starttime = datetime.datetime.utcnow()
         while True:
-            # pylint: disable=broad-except
             try:
                 length = self._port.write(command.encode('ascii'))
                 if length != 1:
@@ -227,7 +214,8 @@ class DomeDaemon:
                 with self._last_error_lock:
                     self._last_error_message = str(exception)
                     self._last_error_time = datetime.datetime.utcnow()
-            # pylint: enable=broad-except
+                observatory.log.error('domed', 'Failed to send serial command (' \
+                                      + str(exception) + ')')
             time.sleep(COMMAND_DELAY)
             runtime = datetime.datetime.utcnow() - starttime
             stopped = not force_close and self._force_stopped
@@ -280,9 +268,17 @@ class DomeDaemon:
             if not success:
                 return CommandStatus.Blocked
 
+            if east and west:
+                observatory.log.info('domed', 'Opening both shutters')
+            else:
+                shutter = 'east' if east else 'west'
+                observatory.log.info('domed', 'Opening ' + shutter + ' shutter')
+
             if not self.__open_shutters(east, west):
+                observatory.log.error('domed', 'Failed to open dome')
                 return CommandStatus.Failed
 
+            observatory.log.info('domed', 'Open complete')
             return CommandStatus.Succeeded
 
     @Pyro4.expose
@@ -299,9 +295,17 @@ class DomeDaemon:
             if not success:
                 return CommandStatus.Blocked
 
+            if east and west:
+                observatory.log.info('domed', 'Closing both shutters')
+            else:
+                shutter = 'east' if east else 'west'
+                observatory.log.info('domed', 'Closing ' + shutter + ' shutter')
+
             if not self.__close_shutters(east, west):
+                observatory.log.error('domed', 'Failed to close dome')
                 return CommandStatus.Failed
 
+            observatory.log.info('domed', 'Close complete')
             return CommandStatus.Succeeded
 
     @Pyro4.expose
@@ -309,6 +313,8 @@ class DomeDaemon:
         """Stops any active shutter movement"""
         if self._heartbeat_closing_dome:
             return CommandStatus.HeartbeatCloseInProgress
+
+        observatory.log.warning('domed', 'Received stop command')
 
         # The stop command overrides all other commands
         self._force_stopped = True
@@ -329,6 +335,13 @@ class DomeDaemon:
         self._heartbeat_timeout = timeout
         self._heartbeat_time_remaining = timeout
         self._heartbeat_last_ping = datetime.datetime.utcnow()
+
+        if timeout == 0:
+            observatory.log.info('domed', 'Heartbeat disabled')
+        else:
+            observatory.log.info('domed', 'Heartbeat enabled with ' + str(self._heartbeat_timeout) \
+                                  + 's timeout')
+
         return CommandStatus.Succeeded
 
     @Pyro4.expose
@@ -348,11 +361,15 @@ class DomeDaemon:
             if self._east_shutter != DomeShutterStatus.Open:
                 return CommandStatus.EastShutterMustBeFullyOpen
 
+            observatory.log.info('domed', 'Received hatch access command')
+
             # Close the east shutter just enough to clear the hatch
             at_requested_limit = lambda runtime: runtime > HATCH_ACCESS_CLOSE_TIME
             if not self.__move_shutter('A', at_requested_limit, False):
+                observatory.log.error('domed', 'Failed to move the shutter to clear the hatch')
                 return CommandStatus.Failed
 
+            observatory.log.info('domed', 'Shutter has been moved to clear the hatch')
             return CommandStatus.Succeeded
 
     @Pyro4.expose
@@ -369,18 +386,6 @@ class DomeDaemon:
         with self._last_error_lock:
             return (self._last_error_time, self._last_error_message)
 
-def spawn_daemon():
-    """Spawns the daemon and registers it with Pyro"""
-    Pyro4.config.COMMTIMEOUT = 5
-    Pyro4.config.REQUIRE_EXPOSE = True
-
-    pyro = Pyro4.Daemon(host=PYRO_HOST, port=PYRO_PORT)
-    dome = DomeDaemon()
-    uri = pyro.register(dome, objectId='dome_daemon')
-
-    print('Starting dome daemon with Pyro ID:', uri)
-    pyro.requestLoop()
-    print('Stopping dome daemon with Pyro ID:', uri)
-
 if __name__ == '__main__':
-    spawn_daemon()
+    observatory.daemons.onemetre_dome.launch(DomeDaemon())
+

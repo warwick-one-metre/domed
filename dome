@@ -21,13 +21,10 @@ import datetime
 import os
 import sys
 import Pyro4
+import warwick.observatory as observatory
 
-PYRO_HOST = '192.168.0.102'
-PYRO_PORT = 9004
-PYRO_NAME = 'dome_daemon'
-
-PYRO_URI = 'PYRO:' + PYRO_NAME + '@' + PYRO_HOST + ':' + str(PYRO_PORT)
 SCRIPT_NAME = os.path.basename(sys.argv[0])
+sys.excepthook = Pyro4.util.excepthook
 
 FMT_GREEN = u'\033[92m'
 FMT_RED = u'\033[91m'
@@ -82,9 +79,9 @@ def run_command(command):
 def print_status():
     """Prints the dome status in human-readable form"""
     error = None
-    with Pyro4.Proxy(PYRO_URI) as domed:
-        status = domed.status()
-        error = domed.last_error()
+    with observatory.daemons.onemetre_dome.connect() as dome:
+        status = dome.status()
+        error = dome.last_error()
 
     date = datetime.datetime.strptime(status[0], '%Y-%m-%dT%H:%M:%SZ')
     if status[3] > 0:
@@ -106,21 +103,19 @@ def print_status():
 
 def stop():
     """Stops any active dome movement"""
-    with Pyro4.Proxy(PYRO_URI) as domed:
-        return domed.stop()
+    with observatory.daemons.onemetre_dome.connect() as dome:
+        return dome.stop()
 
 def open_dome(args):
     """Opens the dome shutters"""
     if len(args) > 0:
-        if args[0] == 'east':
-            with Pyro4.Proxy(PYRO_URI) as domed:
-                return domed.open_shutters(east=True)
-        if args[0] == 'west':
-            with Pyro4.Proxy(PYRO_URI) as domed:
-                return domed.open_shutters(west=True)
-        if args[0] == 'both':
-            with Pyro4.Proxy(PYRO_URI) as domed:
-                return domed.open_shutters(east=True, west=True)
+        with observatory.daemons.onemetre_dome.connect(timeout=0) as dome:
+            if args[0] == 'east':
+                return dome.open_shutters(east=True)
+            if args[0] == 'west':
+                return dome.open_shutters(west=True)
+            if args[0] == 'both':
+                return dome.open_shutters(east=True, west=True)
 
     print('usage: {} open (east|west|both)'.format(SCRIPT_NAME))
     return -1
@@ -128,15 +123,13 @@ def open_dome(args):
 def close_dome(args):
     """Closes the dome shutters"""
     if len(args) > 0:
-        if args[0] == 'east':
-            with Pyro4.Proxy(PYRO_URI) as domed:
-                return domed.close_shutters(east=True)
-        if args[0] == 'west':
-            with Pyro4.Proxy(PYRO_URI) as domed:
-                return domed.close_shutters(west=True)
-        if args[0] == 'both':
-            with Pyro4.Proxy(PYRO_URI) as domed:
-                return domed.close_shutters(east=True, west=True)
+        with observatory.daemons.onemetre_dome.connect(timeout=0) as dome:
+            if args[0] == 'east':
+                return dome.close_shutters(east=True)
+            if args[0] == 'west':
+                return dome.close_shutters(west=True)
+            if args[0] == 'both':
+                return dome.close_shutters(east=True, west=True)
 
     print('usage: {} close (east|west|both)'.format(SCRIPT_NAME))
     return -1
@@ -144,18 +137,16 @@ def close_dome(args):
 def heartbeat(args):
     """Configure the dome close heartbeat"""
     if len(args) > 0:
-        if args[0] == 'ping':
-            with Pyro4.Proxy(PYRO_URI) as domed:
-                return domed.ping_heartbeat()
-        if args[0] == 'disable':
-            with Pyro4.Proxy(PYRO_URI) as domed:
-                return domed.configure_heartbeat(0)
-        if args[0] == 'enable':
-            if len(args) > 1:
-                timeout = int(args[1])
-                if timeout > 0:
-                    with Pyro4.Proxy(PYRO_URI) as domed:
-                        return domed.configure_heartbeat(timeout)
+        with observatory.daemons.onemetre_dome.connect() as dome:
+            if args[0] == 'ping':
+                return dome.ping_heartbeat()
+            if args[0] == 'disable':
+                return dome.configure_heartbeat(0)
+            if args[0] == 'enable':
+                if len(args) > 1:
+                    timeout = int(args[1])
+                    if timeout > 0:
+                        return dome.configure_heartbeat(timeout)
             print('usage: {} heartbeat enable <timeout in seconds>'.format(SCRIPT_NAME))
             return -1
     print('usage: {} heartbeat (disable|enable|ping)'.format(SCRIPT_NAME))
@@ -163,8 +154,8 @@ def heartbeat(args):
 
 def access_hatch():
     """Raise the east shutter to provide hatch access"""
-    with Pyro4.Proxy(PYRO_URI) as domed:
-        return domed.access_hatch()
+    with observatory.daemons.onemetre_dome.connect(timeout=0) as dome:
+        return dome.access_hatch()
 
 def print_usage(name):
     """Prints the utility help"""
