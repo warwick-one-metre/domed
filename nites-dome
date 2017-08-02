@@ -83,7 +83,6 @@ def print_status():
     error = None
     with observatory.daemons.nites_dome.connect() as dome:
         status = dome.status()
-        error = dome.last_error()
 
     date = datetime.datetime.strptime(status['date'], '%Y-%m-%dT%H:%M:%SZ')
     if status['heartbeat_timeout'] > 0:
@@ -96,10 +95,6 @@ def print_status():
     print(' North shutter: {}'.format(STATUS_DESCRIPTIONS[status['west_shutter']]))
     print(' South shutter: {}'.format(STATUS_DESCRIPTIONS[status['east_shuter']]))
     print('     Heartbeat: ' + FMT_BOLD + heartbeat_status + FMT_CLEAR)
-
-    if error[0] is not None:
-        print('Last error was at {}'.format(error[0]))
-        print(error[1])
 
     return 0
 

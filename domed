@@ -79,9 +79,6 @@ class DomeDaemon:
     """Daemon class that wraps the RS232 interface"""
     def __init__(self, config):
         self._config = config
-        self._last_error_lock = threading.Lock()
-        self._last_error_time = None
-        self._last_error_message = None
         self._port = None
 
         self._status_lock = threading.Lock()
@@ -116,9 +113,6 @@ class DomeDaemon:
             except Exception as exception:
                 print(exception)
                 print('Will retry in 5 seconds...')
-                with self._last_error_lock:
-                    self._last_error_message = str(exception)
-                    self._last_error_time = datetime.datetime.utcnow()
                 observatory.log.error(self._config.log_name,
                                       'Failed to connect to serial port (' + str(exception) + ')')
                 time.sleep(5.)
@@ -155,10 +149,6 @@ class DomeDaemon:
 
             except Exception as exception:
                 self._port.close()
-                with self._last_error_lock:
-                    self._last_error_message = str(exception)
-                    self._last_error_time = datetime.datetime.utcnow()
-
                 print(exception)
                 print('Will retry in 5 seconds...')
                 observatory.log.error(self._config.log_name, 'Failed to read serial port (' \
@@ -212,9 +202,9 @@ class DomeDaemon:
         elif status == ord('y'):
             self._west_shutter = DomeShutterStatus.Open
         else:
-            with self._last_error_lock:
-                self._last_error_message = 'Unknown status code: {0}'.format(status)
-                self._last_error_time = datetime.datetime.utcnow()
+            print('Unknown status code: {0}'.format(status))
+            observatory.log.error(self._config.log_name, 'Unknown dome status code ' \
+                                                         + str(status))
     # pylint: enable=too-many-branches
 
     def __monitor_heartbeat(self):
@@ -254,9 +244,6 @@ class DomeDaemon:
                 if length != 1:
                     raise serial.SerialException('Failed to send command ' + command)
             except Exception as exception:
-                with self._last_error_lock:
-                    self._last_error_message = str(exception)
-                    self._last_error_time = datetime.datetime.utcnow()
                 observatory.log.error(self._config.log_name, 'Failed to send serial command (' \
                                       + str(exception) + ')')
             time.sleep(self._config.command_delay_seconds)
@@ -429,12 +416,6 @@ class DomeDaemon:
                 'heartbeat_timeout': self._heartbeat_timeout,
                 'heartbeat_remaining': self._heartbeat_time_remaining
             }
-
-    @Pyro4.expose
-    def last_error(self):
-        """Query the latest error time and message"""
-        with self._last_error_lock:
-            return (self._last_error_time, self._last_error_message)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Dome daemon')
