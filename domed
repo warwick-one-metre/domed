@@ -409,10 +409,13 @@ class DomeDaemon:
         """Query the latest status."""
         with self._status_lock:
             date = self._status_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+            closed = self._east_shutter == DomeShutterStatus.Closed and \
+                self._west_shutter == DomeShutterStatus.Closed
             return {
                 'date': date,
                 'east_shutter': self._east_shutter,
                 'west_shutter': self._west_shutter,
+                'closed': closed,
                 'heartbeat_timeout': self._heartbeat_timeout,
                 'heartbeat_remaining': self._heartbeat_time_remaining
             }
