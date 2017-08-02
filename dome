@@ -83,16 +83,16 @@ def print_status():
         status = dome.status()
         error = dome.last_error()
 
-    date = datetime.datetime.strptime(status[0], '%Y-%m-%dT%H:%M:%SZ')
-    if status[3] > 0:
-        heartbeat_status = str(round(status[4])) if status[4] > 0 else FMT_RED + 'EXPIRED'
-        heartbeat_status += ' / ' + str(status[3])
+    date = datetime.datetime.strptime(status['date'], '%Y-%m-%dT%H:%M:%SZ')
+    if status['heartbeat_timeout'] > 0:
+        heartbeat_status = str(round(status['heartbeat_remaining'])) if status['heartbeat_remaining'] > 0 else FMT_RED + 'EXPIRED'
+        heartbeat_status += ' / ' + str(status['heartbeat_timeout'])
     else:
         heartbeat_status = 'DISABLED'
 
     print('Dome status at: {0}'.format(FMT_BOLD + str(date) + FMT_CLEAR))
-    print('  East shutter: {}'.format(STATUS_DESCRIPTIONS[status[1]]))
-    print('  West shutter: {}'.format(STATUS_DESCRIPTIONS[status[2]]))
+    print('  East shutter: {}'.format(STATUS_DESCRIPTIONS[status['east_shuter']]))
+    print('  West shutter: {}'.format(STATUS_DESCRIPTIONS[status['west_shutter']]))
     print('     Heartbeat: ' + FMT_BOLD + heartbeat_status + FMT_CLEAR)
 
     if error[0] is not None:
