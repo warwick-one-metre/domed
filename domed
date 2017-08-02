@@ -20,7 +20,9 @@
 # pylint: disable=too-few-public-methods
 # pylint: disable=too-many-instance-attributes
 # pylint: disable=broad-except
+# pylint: disable=invalid-name
 
+import argparse
 import datetime
 import threading
 import time
@@ -29,11 +31,31 @@ import serial
 import warwick.observatory as observatory
 from warwick.observatory import TryLock
 
-# Maximum time it should take for the shutters to fully open or close
-SHUTTER_TIMEOUT = datetime.timedelta(seconds=60)
+class DomeConfig:
+    """Helper class containing dome configuration values"""
+    def __init__(self, log_name, daemon, serial_port, serial_baud=9600, serial_timeout_seconds=3,
+                 shutter_timeout_seconds=60,
+                 command_delay_seconds=0.5, legacy_controller=False):
+        self.log_name = log_name
+        self.daemon = daemon
+        self.serial_port = serial_port
+        self.serial_baud = serial_baud
+        self.serial_timeout_seconds = serial_timeout_seconds
+        self.command_delay_seconds = command_delay_seconds
+        self.shutter_timeout_seconds = shutter_timeout_seconds
+        self.legacy_controller = legacy_controller
 
-# Delay between sending command bytes
-COMMAND_DELAY = 0.5
+DOME_CONFIG = {
+    'onemetre': DomeConfig('onemetre_dome',
+                           observatory.daemons.onemetre_dome,
+                           serial_port='/dev/ttyS0'),
+    'nites': DomeConfig('nites_dome',
+                        observatory.daemons.nites_dome,
+                        serial_port='COM6',
+                        serial_timeout_seconds=0.5,
+                        shutter_timeout_seconds=8.5,
+                        legacy_controller=True)
+}
 
 # Length of time to close the east shutter to clear the hatch
 HATCH_ACCESS_CLOSE_TIME = datetime.timedelta(seconds=15)
@@ -55,11 +77,8 @@ class DomeShutterStatus:
 
 class DomeDaemon:
     """Daemon class that wraps the RS232 interface"""
-    SERIAL_PORT = '/dev/ttyS0'
-    SERIAL_BAUD = 9600
-    SERIAL_TIMEOUT = 3
-
-    def __init__(self):
+    def __init__(self, config):
+        self._config = config
         self._last_error_lock = threading.Lock()
         self._last_error_time = None
         self._last_error_message = None
@@ -91,33 +110,44 @@ class DomeDaemon:
         while True:
             # Initial setup
             try:
-                self._port = serial.Serial(DomeDaemon.SERIAL_PORT,
-                                           DomeDaemon.SERIAL_BAUD,
-                                           timeout=DomeDaemon.SERIAL_TIMEOUT)
+                self._port = serial.Serial(self._config.serial_port,
+                                           self._config.serial_baud,
+                                           timeout=self._config.serial_timeout_seconds)
             except Exception as exception:
                 print(exception)
                 print('Will retry in 5 seconds...')
                 with self._last_error_lock:
                     self._last_error_message = str(exception)
                     self._last_error_time = datetime.datetime.utcnow()
-                observatory.log.error('domed', 'Failed to connect to serial port (' \
-                                      + str(exception) + ')')
+                observatory.log.error(self._config.log_name,
+                                      'Failed to connect to serial port (' + str(exception) + ')')
                 time.sleep(5.)
                 continue
 
             try:
-                print('Connected to', DomeDaemon.SERIAL_PORT)
+                print('Connected to', self._config.serial_port)
 
                 # Flush any stale state
                 self._port.flushInput()
                 self._port.flushOutput()
+
+                if self._config.legacy_controller:
+                    # The older non-PLC controllers will only return A/B/X/Y status bytes in
+                    # response to an issued move command. We therefore need to try closing a
+                    # step to find out where the shutters are now
+                    self.__move_shutter('A', lambda runtime: True, True)
+                    self.__move_shutter('B', lambda runtime: True, True)
 
                 # Main run loop
                 while True:
                     data = self._port.read(1)
 
                     if len(data) == 0:
-                        raise serial.SerialTimeoutException('Read timeout')
+                        if self._config.legacy_controller:
+                            # Legacy controllers only send data in response to a move command
+                            continue
+                        else:
+                            raise serial.SerialTimeoutException('Read timeout')
 
                     with self._status_lock:
                         self.__parse_status(data[0])
@@ -131,7 +161,7 @@ class DomeDaemon:
 
                 print(exception)
                 print('Will retry in 5 seconds...')
-                observatory.log.error('domed', 'Failed to read serial port (' \
+                observatory.log.error(self._config.log_name, 'Failed to read serial port (' \
                                       + str(exception) + ')')
                 time.sleep(5.)
 
@@ -154,17 +184,29 @@ class DomeDaemon:
             if self._west_shutter != DomeShutterStatus.Open:
                 self._west_shutter = DomeShutterStatus.PartiallyOpen
         elif status == ord('A'):
-            self._east_shutter = DomeShutterStatus.Closing
+            if self._config.legacy_controller:
+                self._east_shutter = DomeShutterStatus.PartiallyOpen
+            else:
+                self._east_shutter = DomeShutterStatus.Closing
         elif status == ord('a'):
-            self._east_shutter = DomeShutterStatus.Opening
+            if self._config.legacy_controller:
+                self._east_shutter = DomeShutterStatus.PartiallyOpen
+            else:
+                self._east_shutter = DomeShutterStatus.Opening
         elif status == ord('X'):
             self._east_shutter = DomeShutterStatus.Closed
         elif status == ord('x'):
             self._east_shutter = DomeShutterStatus.Open
         elif status == ord('B'):
-            self._west_shutter = DomeShutterStatus.Closing
+            if self._config.legacy_controller:
+                self._west_shutter = DomeShutterStatus.PartiallyOpen
+            else:
+                self._west_shutter = DomeShutterStatus.Closing
         elif status == ord('b'):
-            self._west_shutter = DomeShutterStatus.Opening
+            if self._config.legacy_controller:
+                self._west_shutter = DomeShutterStatus.PartiallyOpen
+            else:
+                self._west_shutter = DomeShutterStatus.Opening
         elif status == ord('Y'):
             self._west_shutter = DomeShutterStatus.Closed
         elif status == ord('y'):
@@ -195,11 +237,12 @@ class DomeDaemon:
                             self._west_shutter == DomeShutterStatus.Closing:
                         self._west_shutter = DomeShutterStatus.PartiallyOpen
 
-                    observatory.log.warning('domed', 'Heartbeat has timed out: force-closing dome')
+                    observatory.log.warning(self._config.log_name,
+                                            'Heartbeat has timed out: force-closing dome')
 
                     self.__close_shutters(True, True, force=True)
                     self._heartbeat_closing_dome = False
-                    observatory.log.info('domed', 'Heartbeat force-close complete')
+                    observatory.log.info(self._config.log_name, 'Heartbeat force-close complete')
             time.sleep(1.)
 
     def __move_shutter(self, command, at_requested_limit, force_close):
@@ -214,14 +257,14 @@ class DomeDaemon:
                 with self._last_error_lock:
                     self._last_error_message = str(exception)
                     self._last_error_time = datetime.datetime.utcnow()
-                observatory.log.error('domed', 'Failed to send serial command (' \
+                observatory.log.error(self._config.log_name, 'Failed to send serial command (' \
                                       + str(exception) + ')')
-            time.sleep(COMMAND_DELAY)
-            runtime = datetime.datetime.utcnow() - starttime
+            time.sleep(self._config.command_delay_seconds)
+            runtime = (datetime.datetime.utcnow() - starttime).total_seconds()
             stopped = not force_close and self._force_stopped
             heartbeat = not force_close and self._heartbeat_closing_dome
             at_limit = at_requested_limit(runtime)
-            if stopped or heartbeat or at_limit or runtime > SHUTTER_TIMEOUT:
+            if stopped or heartbeat or at_limit or runtime > self._config.shutter_timeout_seconds:
                 break
 
         return not stopped and not heartbeat and at_limit
@@ -269,16 +312,16 @@ class DomeDaemon:
                 return CommandStatus.Blocked
 
             if east and west:
-                observatory.log.info('domed', 'Opening both shutters')
+                observatory.log.info(self._config.log_name, 'Opening both shutters')
             else:
                 shutter = 'east' if east else 'west'
-                observatory.log.info('domed', 'Opening ' + shutter + ' shutter')
+                observatory.log.info(self._config.log_name, 'Opening ' + shutter + ' shutter')
 
             if not self.__open_shutters(east, west):
-                observatory.log.error('domed', 'Failed to open dome')
+                observatory.log.error(self._config.log_name, 'Failed to open dome')
                 return CommandStatus.Failed
 
-            observatory.log.info('domed', 'Open complete')
+            observatory.log.info(self._config.log_name, 'Open complete')
             return CommandStatus.Succeeded
 
     @Pyro4.expose
@@ -296,16 +339,16 @@ class DomeDaemon:
                 return CommandStatus.Blocked
 
             if east and west:
-                observatory.log.info('domed', 'Closing both shutters')
+                observatory.log.info(self._config.log_name, 'Closing both shutters')
             else:
                 shutter = 'east' if east else 'west'
-                observatory.log.info('domed', 'Closing ' + shutter + ' shutter')
+                observatory.log.info(self._config.log_name, 'Closing ' + shutter + ' shutter')
 
             if not self.__close_shutters(east, west):
-                observatory.log.error('domed', 'Failed to close dome')
+                observatory.log.error(self._config.log_name, 'Failed to close dome')
                 return CommandStatus.Failed
 
-            observatory.log.info('domed', 'Close complete')
+            observatory.log.info(self._config.log_name, 'Close complete')
             return CommandStatus.Succeeded
 
     @Pyro4.expose
@@ -314,7 +357,7 @@ class DomeDaemon:
         if self._heartbeat_closing_dome:
             return CommandStatus.HeartbeatCloseInProgress
 
-        observatory.log.warning('domed', 'Received stop command')
+        observatory.log.warning(self._config.log_name, 'Received stop command')
 
         # The stop command overrides all other commands
         self._force_stopped = True
@@ -337,10 +380,10 @@ class DomeDaemon:
         self._heartbeat_last_ping = datetime.datetime.utcnow()
 
         if timeout == 0:
-            observatory.log.info('domed', 'Heartbeat disabled')
+            observatory.log.info(self._config.log_name, 'Heartbeat disabled')
         else:
-            observatory.log.info('domed', 'Heartbeat enabled with ' + str(self._heartbeat_timeout) \
-                                  + 's timeout')
+            observatory.log.info(self._config.log_name, 'Heartbeat enabled with ' \
+                                 + str(self._heartbeat_timeout) + 's timeout')
 
         return CommandStatus.Succeeded
 
@@ -361,15 +404,17 @@ class DomeDaemon:
             if self._east_shutter != DomeShutterStatus.Open:
                 return CommandStatus.EastShutterMustBeFullyOpen
 
-            observatory.log.info('domed', 'Received hatch access command')
+            observatory.log.info(self._config.log_name, 'Received hatch access command')
 
             # Close the east shutter just enough to clear the hatch
             at_requested_limit = lambda runtime: runtime > HATCH_ACCESS_CLOSE_TIME
             if not self.__move_shutter('A', at_requested_limit, False):
-                observatory.log.error('domed', 'Failed to move the shutter to clear the hatch')
+                observatory.log.error(self._config.log_name,
+                                      'Failed to move the shutter to clear the hatch')
                 return CommandStatus.Failed
 
-            observatory.log.info('domed', 'Shutter has been moved to clear the hatch')
+            observatory.log.info(self._config.log_name,
+                                 'Shutter has been moved to clear the hatch')
             return CommandStatus.Succeeded
 
     @Pyro4.expose
@@ -387,5 +432,8 @@ class DomeDaemon:
             return (self._last_error_time, self._last_error_message)
 
 if __name__ == '__main__':
-    observatory.daemons.onemetre_dome.launch(DomeDaemon())
-
+    parser = argparse.ArgumentParser(description='Dome daemon')
+    parser.add_argument('dome', choices=DOME_CONFIG.keys(), help='Telescope')
+    args = parser.parse_args()
+    config = DOME_CONFIG[args.dome]
+    config.daemon.launch(DomeDaemon(config))

@@ -1,0 +1,187 @@
+#!/usr/bin/env python3
+#
+# This file is part of domed.
+#
+# domed is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# domed is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with domed.  If not, see <http://www.gnu.org/licenses/>.
+
+"""Commandline client for controlling domed"""
+
+import datetime
+import os
+import sys
+import Pyro4
+import colorama
+import warwick.observatory as observatory
+
+colorama.init()
+
+SCRIPT_NAME = os.path.basename(sys.argv[0])
+sys.excepthook = Pyro4.util.excepthook
+
+FMT_GREEN = u'\033[92m'
+FMT_RED = u'\033[91m'
+FMT_CYAN = u'\033[96m'
+FMT_YELLOW = u'\033[93m'
+FMT_BOLD = u'\033[1m'
+FMT_CLEAR = u'\033[0m'
+
+STATUS_DESCRIPTIONS = {
+    0: FMT_RED + FMT_BOLD + 'CLOSED' + FMT_CLEAR,
+    1: FMT_GREEN + FMT_BOLD + 'OPEN' + FMT_CLEAR,
+    2: FMT_CYAN + FMT_BOLD + 'PARTIALLY OPEN' + FMT_CLEAR,
+    3: FMT_YELLOW + FMT_BOLD + 'OPENING' + FMT_CLEAR,
+    4: FMT_YELLOW + FMT_BOLD + 'CLOSING' + FMT_CLEAR,
+}
+
+# This should be kept in sync with the class in domed
+STATUS_CODES = {
+    # General error codes
+    1: 'error: command failed',
+    2: 'error: another command is already running',
+    3: 'error: heartbeat timeout has expired',
+    4: 'error: heartbeat timeout is closing the dome',
+
+    # dome specific codes
+    -100: 'error: terminated by user',
+    -101: 'error: unable to communicate with dome daemon'
+}
+
+def run_command(command):
+    """Prints the message associated with a status code and returns the code"""
+    try:
+        ret = command()
+    except KeyboardInterrupt:
+        # ctrl-c terminates the running command
+        ret = stop()
+
+        # Report successful stop
+        if ret == 0:
+            ret = -100
+    except Pyro4.errors.CommunicationError:
+        ret = -101
+
+    # Print message associated with error codes, except for -1 (error handled locally)
+    if ret in STATUS_CODES:
+        print(STATUS_CODES[ret])
+    elif ret != -1 and ret != 0:
+        print('Returned unknown status code: {0}'.format(ret))
+    sys.exit(ret)
+
+def print_status():
+    """Prints the dome status in human-readable form"""
+    error = None
+    with observatory.daemons.nites_dome.connect() as dome:
+        status = dome.status()
+        error = dome.last_error()
+
+    date = datetime.datetime.strptime(status[0], '%Y-%m-%dT%H:%M:%SZ')
+    if status[3] > 0:
+        heartbeat_status = str(round(status[4])) if status[4] > 0 else FMT_RED + 'EXPIRED'
+        heartbeat_status += ' / ' + str(status[3])
+    else:
+        heartbeat_status = 'DISABLED'
+
+    print('Dome status at: {0}'.format(FMT_BOLD + str(date) + FMT_CLEAR))
+    print('  North shutter: {}'.format(STATUS_DESCRIPTIONS[status[2]]))
+    print('  South shutter: {}'.format(STATUS_DESCRIPTIONS[status[1]]))
+    print('     Heartbeat: ' + FMT_BOLD + heartbeat_status + FMT_CLEAR)
+
+    if error[0] is not None:
+        print('Last error was at {}'.format(error[0]))
+        print(error[1])
+
+    return 0
+
+def stop():
+    """Stops any active dome movement"""
+    with observatory.daemons.nites_dome.connect() as dome:
+        return dome.stop()
+
+def open_dome(args):
+    """Opens the dome shutters"""
+    if len(args) > 0:
+        with observatory.daemons.nites_dome.connect(timeout=0) as dome:
+            if args[0] == 'south':
+                return dome.open_shutters(east=True)
+            if args[0] == 'north':
+                return dome.open_shutters(west=True)
+            if args[0] == 'both':
+                return dome.open_shutters(east=True, west=True)
+
+    print('usage: {} open (north|south|both)'.format(SCRIPT_NAME))
+    return -1
+
+def close_dome(args):
+    """Closes the dome shutters"""
+    if len(args) > 0:
+        with observatory.daemons.nites_dome.connect(timeout=0) as dome:
+            if args[0] == 'south':
+                return dome.close_shutters(east=True)
+            if args[0] == 'north':
+                return dome.close_shutters(west=True)
+            if args[0] == 'both':
+                return dome.close_shutters(east=True, west=True)
+
+    print('usage: {} close (north|south|both)'.format(SCRIPT_NAME))
+    return -1
+
+def heartbeat(args):
+    """Configure the dome close heartbeat"""
+    if len(args) > 0:
+        with observatory.daemons.nites_dome.connect() as dome:
+            if args[0] == 'ping':
+                return dome.ping_heartbeat()
+            if args[0] == 'disable':
+                return dome.configure_heartbeat(0)
+            if args[0] == 'enable':
+                if len(args) > 1:
+                    timeout = int(args[1])
+                    if timeout > 0:
+                        return dome.configure_heartbeat(timeout)
+            print('usage: {} heartbeat enable <timeout in seconds>'.format(SCRIPT_NAME))
+            return -1
+    print('usage: {} heartbeat (disable|enable|ping)'.format(SCRIPT_NAME))
+    return -1
+
+def print_usage(name):
+    """Prints the utility help"""
+    print('Usage: {} <command>'.format(name))
+    print()
+    print('   status      print a human-readable summary of the dome status')
+    print('   open        open one or both shutters')
+    print('   close       close one or both shutters')
+    print('   stop        stop manual open/close command (excludes heartbeat)')
+    print('   heartbeat   configure the dome auto-close timeout')
+    print()
+
+    return 1
+
+if __name__ == '__main__':
+    if len(sys.argv) == 1:
+        sys.exit(print_usage(SCRIPT_NAME))
+
+    if sys.argv[1] == 'status':
+        run_command(print_status)
+    elif sys.argv[1] == 'open':
+        run_command(lambda: open_dome(sys.argv[2:]))
+    elif sys.argv[1] == 'close':
+        run_command(lambda: close_dome(sys.argv[2:]))
+    elif sys.argv[1] == 'stop':
+        run_command(stop)
+    elif sys.argv[1] == 'heartbeat':
+        run_command(lambda: heartbeat(sys.argv[2:]))
+
+    # Command not found
+    sys.exit(print_usage(SCRIPT_NAME))
+
