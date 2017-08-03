@@ -42,6 +42,15 @@ STATUS_DESCRIPTIONS = {
     2: FMT_CYAN + FMT_BOLD + 'PARTIALLY OPEN' + FMT_CLEAR,
     3: FMT_YELLOW + FMT_BOLD + 'OPENING' + FMT_CLEAR,
     4: FMT_YELLOW + FMT_BOLD + 'CLOSING' + FMT_CLEAR,
+    5: FMT_RED + FMT_BOLD + 'FORCE CLOSING' + FMT_CLEAR,
+}
+
+HEARTBEAT_MONITOR_STATUS = {
+    0: FMT_BOLD + 'DISABLED' + FMT_CLEAR,
+    1: FMT_GREEN + FMT_BOLD + 'ACTIVE' + FMT_CLEAR,
+    2: FMT_RED + FMT_BOLD + 'CLOSING DOME' + FMT_CLEAR,
+    3: FMT_RED + FMT_BOLD + 'TRIPPED' + FMT_CLEAR,
+    4: FMT_YELLOW + FMT_BOLD + 'UNAVAILABLE' + FMT_CLEAR,
 }
 
 # This should be kept in sync with the class in domed
@@ -49,8 +58,10 @@ STATUS_CODES = {
     # General error codes
     1: 'error: command failed',
     2: 'error: another command is already running',
-    3: 'error: heartbeat timeout has expired',
-    4: 'error: heartbeat timeout is closing the dome',
+    3: 'error: heartbeat monitor has tripped',
+    4: 'error: heartbeat monitor is closing the dome',
+    5: 'error: heartbeat monitor is not available',
+    6: 'error: heartbeat timeout must be less than 120s',
 
     # dome specific codes
     -100: 'error: terminated by user',
@@ -80,22 +91,20 @@ def run_command(command):
 
 def print_status():
     """Prints the dome status in human-readable form"""
-    error = None
     with observatory.daemons.nites_dome.connect() as dome:
         status = dome.status()
 
     date = datetime.datetime.strptime(status['date'], '%Y-%m-%dT%H:%M:%SZ')
-    if status['heartbeat_timeout'] > 0:
-        heartbeat_status = str(round(status['heartbeat_remaining'])) if status['heartbeat_remaining'] > 0 else FMT_RED + 'EXPIRED'
-        heartbeat_status += ' / ' + str(status['heartbeat_timeout'])
-    else:
-        heartbeat_status = 'DISABLED'
+    heartbeat_date = datetime.datetime.strptime(status['heartbeat_date'], '%Y-%m-%dT%H:%M:%SZ')
 
     print('Dome status at: {0}'.format(FMT_BOLD + str(date) + FMT_CLEAR))
     print(' North shutter: {}'.format(STATUS_DESCRIPTIONS[status['west_shutter']]))
-    print(' South shutter: {}'.format(STATUS_DESCRIPTIONS[status['east_shuter']]))
-    print('     Heartbeat: ' + FMT_BOLD + heartbeat_status + FMT_CLEAR)
-
+    print(' South shutter: {}'.format(STATUS_DESCRIPTIONS[status['east_shutter']]))
+    print('Heartbeat status at: {0}'.format(FMT_BOLD + str(heartbeat_date) + FMT_CLEAR))
+    print('       Monitor: ' + HEARTBEAT_MONITOR_STATUS[status['heartbeat_status']])
+    if status['heartbeat_status'] == 1:
+        print('Time remaining: {}'.format(FMT_BOLD + str(status['heartbeat_remaining']) \
+              + FMT_CLEAR))
     return 0
 
 def stop():
@@ -135,18 +144,17 @@ def heartbeat(args):
     """Configure the dome close heartbeat"""
     if len(args) > 0:
         with observatory.daemons.nites_dome.connect() as dome:
-            if args[0] == 'ping':
-                return dome.ping_heartbeat()
             if args[0] == 'disable':
-                return dome.configure_heartbeat(0)
+                return dome.set_heartbeat_timer(0)
+
             if args[0] == 'enable':
                 if len(args) > 1:
                     timeout = int(args[1])
                     if timeout > 0:
-                        return dome.configure_heartbeat(timeout)
+                        return dome.set_heartbeat_timer(timeout)
             print('usage: {} heartbeat enable <timeout in seconds>'.format(SCRIPT_NAME))
             return -1
-    print('usage: {} heartbeat (disable|enable|ping)'.format(SCRIPT_NAME))
+    print('usage: {} heartbeat (disable|enable)'.format(SCRIPT_NAME))
     return -1
 
 def print_usage(name):

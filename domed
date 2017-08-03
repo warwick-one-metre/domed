@@ -35,7 +35,8 @@ class DomeConfig:
     """Helper class containing dome configuration values"""
     def __init__(self, log_name, daemon, serial_port, serial_baud=9600, serial_timeout_seconds=3,
                  shutter_timeout_seconds=60,
-                 command_delay_seconds=0.5, legacy_controller=False):
+                 command_delay_seconds=0.5, legacy_controller=False,
+                 heartbeat_port=None, heartbeat_baud=9600, heartbeat_timeout_seconds=3):
         self.log_name = log_name
         self.daemon = daemon
         self.serial_port = serial_port
@@ -44,6 +45,9 @@ class DomeConfig:
         self.command_delay_seconds = command_delay_seconds
         self.shutter_timeout_seconds = shutter_timeout_seconds
         self.legacy_controller = legacy_controller
+        self.heartbeat_port = heartbeat_port
+        self.heartbeat_baud = heartbeat_baud
+        self.heartbeat_timeout_seconds = heartbeat_timeout_seconds
 
 DOME_CONFIG = {
     'onemetre': DomeConfig('onemetre_dome',
@@ -51,10 +55,11 @@ DOME_CONFIG = {
                            serial_port='/dev/ttyS0'),
     'nites': DomeConfig('nites_dome',
                         observatory.daemons.nites_dome,
-                        serial_port='COM6',
+                        serial_port='COM8',
                         serial_timeout_seconds=0.5,
                         shutter_timeout_seconds=8.5,
-                        legacy_controller=True)
+                        legacy_controller=True,
+                        heartbeat_port='COM9')
 }
 
 # Length of time to close the east shutter to clear the hatch
@@ -69,11 +74,17 @@ class CommandStatus:
     Blocked = 2
     HeartbeatTimedOut = 3
     HeartbeatCloseInProgress = 4
+    HeartbeatUnavailable = 5
+    HeartbeatInvalidTimeout = 6
     EastShutterMustBeFullyOpen = 10
 
 class DomeShutterStatus:
     """Status of the dome shutters"""
-    Closed, Open, PartiallyOpen, Opening, Closing = range(5)
+    Closed, Open, PartiallyOpen, Opening, Closing, HeartbeatMonitorForceClosing = range(6)
+
+class DomeHeartbeatStatus:
+    """Status of the dome heartbeat monitoring"""
+    Disabled, Active, TrippedClosing, TrippedIdle, Unavailable = range(5)
 
 class DomeDaemon:
     """Daemon class that wraps the RS232 interface"""
@@ -89,18 +100,19 @@ class DomeDaemon:
         self._command_lock = threading.Lock()
         self._force_stopped = False
 
-        self._heartbeat_last_ping = datetime.datetime.min
-        self._heartbeat_timeout = 0
-        self._heartbeat_time_remaining = 0
-        self._heartbeat_closing_dome = False
-
         runloop = threading.Thread(target=self.__monitor_dome_status)
         runloop.daemon = True
         runloop.start()
 
-        heartbeat = threading.Thread(target=self.__monitor_heartbeat)
-        heartbeat.daemon = True
-        heartbeat.start()
+        self._heartbeat_port = None
+        self._heartbeat_status = DomeHeartbeatStatus.Unavailable
+        self._heartbeat_time_remaining = 0
+        self._heartbeat_date = datetime.datetime.utcnow()
+
+        if self._config.heartbeat_port:
+            heartbeat = threading.Thread(target=self.__monitor_heartbeat)
+            heartbeat.daemon = True
+            heartbeat.start()
 
     def __monitor_dome_status(self):
         """Monitors the status of the dome by reading serial port"""
@@ -119,7 +131,9 @@ class DomeDaemon:
                 continue
 
             try:
-                print('Connected to', self._config.serial_port)
+                print('Connected to dome on', self._config.serial_port)
+                observatory.log.info(self._config.log_name,
+                                     'Connected to dome on ' + self._config.serial_port)
 
                 # Flush any stale state
                 self._port.flushInput()
@@ -129,8 +143,8 @@ class DomeDaemon:
                     # The older non-PLC controllers will only return A/B/X/Y status bytes in
                     # response to an issued move command. We therefore need to try closing a
                     # step to find out where the shutters are now
-                    self.__move_shutter('A', lambda runtime: True, True)
-                    self.__move_shutter('B', lambda runtime: True, True)
+                    self.__move_shutter('A', lambda runtime: True)
+                    self.__move_shutter('B', lambda runtime: True)
 
                 # Main run loop
                 while True:
@@ -210,32 +224,89 @@ class DomeDaemon:
     def __monitor_heartbeat(self):
         """Monitors the heartbeat timer and close the dome if it expires"""
         while True:
-            if self._heartbeat_timeout > 0:
-                delta = datetime.datetime.utcnow() - self._heartbeat_last_ping
-                self._heartbeat_time_remaining = self._heartbeat_timeout - delta.total_seconds()
-                if self._heartbeat_time_remaining < 0 and \
-                        (self._east_shutter != DomeShutterStatus.Closed or
-                         self._west_shutter != DomeShutterStatus.Closed):
-                    self._heartbeat_time_remaining = 0
+            # Initial setup
+            try:
+                self._heartbeat_port = serial.Serial(self._config.heartbeat_port,
+                                                     self._config.heartbeat_baud,
+                                                     timeout=self._config.heartbeat_timeout_seconds)
+            except Exception as exception:
+                print('Failed to open heartbeat monitor connection with error:')
+                print(exception)
+                print('Will retry in 5 seconds...')
+                if self._heartbeat_status != DomeHeartbeatStatus.Unavailable:
+                    observatory.log.error(self._config.log_name,
+                                          'Failed to connect to heartbeat monitor (' \
+                                          + str(exception) + ')')
+                time.sleep(5.)
 
-                    # Force-stop any active movements
-                    self._heartbeat_closing_dome = True
-                    if self._east_shutter == DomeShutterStatus.Opening or \
-                            self._east_shutter == DomeShutterStatus.Closing:
-                        self._east_shutter = DomeShutterStatus.PartiallyOpen
-                    if self._west_shutter == DomeShutterStatus.Opening or \
-                            self._west_shutter == DomeShutterStatus.Closing:
-                        self._west_shutter = DomeShutterStatus.PartiallyOpen
+                self._heartbeat_status = DomeHeartbeatStatus.Unavailable
+                continue
 
-                    observatory.log.warning(self._config.log_name,
-                                            'Heartbeat has timed out: force-closing dome')
+            try:
+                print('Connected to heartbeat monitor on', self._config.heartbeat_port)
+                observatory.log.info(self._config.log_name,
+                                     'Connected to heartbeat monitor on ' \
+                                     + self._config.heartbeat_port)
 
-                    self.__close_shutters(True, True, force=True)
-                    self._heartbeat_closing_dome = False
-                    observatory.log.info(self._config.log_name, 'Heartbeat force-close complete')
-            time.sleep(1.)
+                # Flush any stale state
+                self._heartbeat_port.flushInput()
+                self._heartbeat_port.flushOutput()
+                self._heartbeat_status = DomeHeartbeatStatus.Disabled
 
-    def __move_shutter(self, command, at_requested_limit, force_close):
+                # Main run loop
+                while True:
+                    data = self._heartbeat_port.read(1)
+                    if len(data) == 0:
+                        raise serial.SerialTimeoutException('Read timeout')
+
+                    status = data[-1]
+                    with self._status_lock:
+                        self._heartbeat_time_remaining = 0
+                        if status == 254:
+                            if self._heartbeat_status != DomeHeartbeatStatus.TrippedClosing:
+                                observatory.log.error(self._config.log_name,
+                                                      'Heartbeat monitor is closing dome')
+                            self._heartbeat_status = DomeHeartbeatStatus.TrippedClosing
+                            self._east_shutter = DomeShutterStatus.HeartbeatMonitorForceClosing
+                            self._west_shutter = DomeShutterStatus.HeartbeatMonitorForceClosing
+                            self._status_time = datetime.datetime.utcnow()
+                        elif status == 255:
+                            if self._heartbeat_status != DomeHeartbeatStatus.TrippedIdle:
+                                observatory.log.error(self._config.log_name,
+                                                      'Heartbeat monitor has finished closing dome')
+                            if self._heartbeat_status != DomeHeartbeatStatus.TrippedIdle \
+                                    and self._config.legacy_controller:
+                                # The heartbeat monitor disconnects the dome serial connection when
+                                # it is closing the dome, so we don't know for sure what the current
+                                # status of the dome is now. Issue another close step so that we can
+                                # receive a new status update
+                                self.__move_shutter('A', lambda runtime: True)
+                                self.__move_shutter('B', lambda runtime: True)
+                            self._heartbeat_status = DomeHeartbeatStatus.TrippedIdle
+                        elif status == 0:
+                            if self._heartbeat_status != DomeHeartbeatStatus.Disabled:
+                                observatory.log.info(self._config.log_name, 'Heartbeat disabled')
+                            self._heartbeat_status = DomeHeartbeatStatus.Disabled
+                        else:
+                            if self._heartbeat_status != DomeHeartbeatStatus.Active:
+                                observatory.log.info(self._config.log_name, 'Heartbeat enabled')
+                            self._heartbeat_status = DomeHeartbeatStatus.Active
+
+                            # Heartbeat monitor represents time using half-second ticks
+                            self._heartbeat_time_remaining = status / 2.
+
+                        self._heartbeat_date = datetime.datetime.utcnow()
+
+            except Exception as exception:
+                self._heartbeat_port.close()
+                self._heartbeat_status = DomeHeartbeatStatus.Unavailable
+                print(exception)
+                print('Will retry in 5 seconds...')
+                observatory.log.error(self._config.log_name, 'Failed to read heartbeat monitor (' \
+                                      + str(exception) + ')')
+                time.sleep(5.)
+
+    def __move_shutter(self, command, at_requested_limit):
         """Issues a dome command and blocks until the final state is reached (or timeout)"""
         starttime = datetime.datetime.utcnow()
         while True:
@@ -248,50 +319,51 @@ class DomeDaemon:
                                       + str(exception) + ')')
             time.sleep(self._config.command_delay_seconds)
             runtime = (datetime.datetime.utcnow() - starttime).total_seconds()
-            stopped = not force_close and self._force_stopped
-            heartbeat = not force_close and self._heartbeat_closing_dome
+            heartbeat_tripped = self._heartbeat_status == DomeHeartbeatStatus.TrippedClosing or \
+                self._heartbeat_status == DomeHeartbeatStatus.TrippedIdle
             at_limit = at_requested_limit(runtime)
-            if stopped or heartbeat or at_limit or runtime > self._config.shutter_timeout_seconds:
+            if self._force_stopped or heartbeat_tripped or at_limit \
+                    or runtime > self._config.shutter_timeout_seconds:
                 break
 
-        return not stopped and not heartbeat and at_limit
+        return not self._force_stopped and not heartbeat_tripped and at_limit
 
-    def __open_shutters(self, east, west, force=False):
+    def __open_shutters(self, east, west):
         """Open the requested shutters"""
         success = True
 
         # TODO: Check the wind direction and open the downwind shutter first
         if east:
             at_requested_limit = lambda runtime: self._east_shutter == DomeShutterStatus.Open
-            success = success and self.__move_shutter('a', at_requested_limit, force)
+            success = success and self.__move_shutter('a', at_requested_limit)
 
         if west:
             at_requested_limit = lambda runtime: self._west_shutter == DomeShutterStatus.Open
-            success = success and self.__move_shutter('b', at_requested_limit, force)
+            success = success and self.__move_shutter('b', at_requested_limit)
         return success
 
-    def __close_shutters(self, east, west, force=False):
+    def __close_shutters(self, east, west):
         """Close the requested shutters"""
         success = True
 
         # TODO: Check the wind direction and close the upwind shutter first
         if east:
             at_requested_limit = lambda runtime: self._east_shutter == DomeShutterStatus.Closed
-            success = success and self.__move_shutter('A', at_requested_limit, force)
+            success = success and self.__move_shutter('A', at_requested_limit)
 
         if west:
             at_requested_limit = lambda runtime: self._west_shutter == DomeShutterStatus.Closed
-            success = success and self.__move_shutter('B', at_requested_limit, force)
+            success = success and self.__move_shutter('B', at_requested_limit)
         return success
 
     @Pyro4.expose
     def open_shutters(self, east=False, west=False):
         """Opens the requested shutter.
            Returns once the requested shutters reach their limits or the command times out."""
-        if self._heartbeat_closing_dome:
+        if self._heartbeat_status == DomeHeartbeatStatus.TrippedClosing:
             return CommandStatus.HeartbeatCloseInProgress
 
-        if self._heartbeat_timeout > 0 and self._heartbeat_time_remaining <= 0:
+        if self._heartbeat_status == DomeHeartbeatStatus.TrippedIdle:
             return CommandStatus.HeartbeatTimedOut
 
         with TryLock(self._command_lock) as success:
@@ -315,10 +387,10 @@ class DomeDaemon:
     def close_shutters(self, east=False, west=False):
         """Closes the requested shutter.
            Returns once the requested shutters reach their limits or the command times out."""
-        if self._heartbeat_closing_dome:
+        if self._heartbeat_status == DomeHeartbeatStatus.TrippedClosing:
             return CommandStatus.HeartbeatCloseInProgress
 
-        if self._heartbeat_timeout > 0 and self._heartbeat_time_remaining <= 0:
+        if self._heartbeat_status == DomeHeartbeatStatus.TrippedIdle:
             return CommandStatus.HeartbeatTimedOut
 
         with TryLock(self._command_lock) as success:
@@ -341,7 +413,7 @@ class DomeDaemon:
     @Pyro4.expose
     def stop(self):
         """Stops any active shutter movement"""
-        if self._heartbeat_closing_dome:
+        if self._heartbeat_status == DomeHeartbeatStatus.TrippedClosing:
             return CommandStatus.HeartbeatCloseInProgress
 
         observatory.log.warning(self._config.log_name, 'Received stop command')
@@ -354,34 +426,32 @@ class DomeDaemon:
         return CommandStatus.Succeeded
 
     @Pyro4.expose
-    def ping_heartbeat(self):
-        """Reset the auto-close countdown"""
-        self._heartbeat_last_ping = datetime.datetime.utcnow()
-        return CommandStatus.Succeeded
-
-    @Pyro4.expose
-    def configure_heartbeat(self, timeout):
+    def set_heartbeat_timer(self, timeout):
         """Enable or disable the auto-close countdown"""
-        self._heartbeat_timeout = timeout
-        self._heartbeat_time_remaining = timeout
-        self._heartbeat_last_ping = datetime.datetime.utcnow()
+        if self._heartbeat_status == DomeHeartbeatStatus.Unavailable:
+            return CommandStatus.HeartbeatUnavailable
 
-        if timeout == 0:
-            observatory.log.info(self._config.log_name, 'Heartbeat disabled')
-        else:
-            observatory.log.info(self._config.log_name, 'Heartbeat enabled with ' \
-                                 + str(self._heartbeat_timeout) + 's timeout')
+        if self._heartbeat_status == DomeHeartbeatStatus.TrippedClosing:
+            return CommandStatus.HeartbeatCloseInProgress
 
-        return CommandStatus.Succeeded
+        if timeout != 0 and self._heartbeat_status == DomeHeartbeatStatus.TrippedIdle:
+            return CommandStatus.HeartbeatTimedOut
+
+        if timeout < 0 or timeout >= 120:
+            return CommandStatus.HeartbeatInvalidTimeout
+
+        # Heartbeat monitor represents time using half-second ticks
+        length = self._heartbeat_port.write(chr(2 * timeout).encode('ascii'))
+        return CommandStatus.Succeeded if length == 1 else CommandStatus.Failed
 
     @Pyro4.expose
     def access_hatch(self):
         """Closes the requested shutter.
            Returns once the requested shutters reach their limits or the command times out."""
-        if self._heartbeat_closing_dome:
+        if self._heartbeat_status == DomeHeartbeatStatus.TrippedClosing:
             return CommandStatus.HeartbeatCloseInProgress
 
-        if self._heartbeat_timeout > 0 and self._heartbeat_time_remaining <= 0:
+        if self._heartbeat_status == DomeHeartbeatStatus.TrippedIdle:
             return CommandStatus.HeartbeatTimedOut
 
         with TryLock(self._command_lock) as success:
@@ -395,7 +465,7 @@ class DomeDaemon:
 
             # Close the east shutter just enough to clear the hatch
             at_requested_limit = lambda runtime: runtime > HATCH_ACCESS_CLOSE_TIME
-            if not self.__move_shutter('A', at_requested_limit, False):
+            if not self.__move_shutter('A', at_requested_limit):
                 observatory.log.error(self._config.log_name,
                                       'Failed to move the shutter to clear the hatch')
                 return CommandStatus.Failed
@@ -409,6 +479,7 @@ class DomeDaemon:
         """Query the latest status."""
         with self._status_lock:
             date = self._status_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+            heartbeat_date = self._heartbeat_date.strftime('%Y-%m-%dT%H:%M:%SZ')
             closed = self._east_shutter == DomeShutterStatus.Closed and \
                 self._west_shutter == DomeShutterStatus.Closed
             return {
@@ -416,7 +487,8 @@ class DomeDaemon:
                 'east_shutter': self._east_shutter,
                 'west_shutter': self._west_shutter,
                 'closed': closed,
-                'heartbeat_timeout': self._heartbeat_timeout,
+                'heartbeat_date': heartbeat_date,
+                'heartbeat_status': self._heartbeat_status,
                 'heartbeat_remaining': self._heartbeat_time_remaining
             }
 

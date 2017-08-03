@@ -14,7 +14,7 @@ _dome()
             opts="east west both"
             ;;
         heartbeat)
-            opts="ping disable enable"
+            opts="disable enable"
             ;;
         *)
             ;;
