@@ -35,7 +35,7 @@ class DomeConfig:
     """Helper class containing dome configuration values"""
     def __init__(self, log_name, daemon, serial_port, serial_baud=9600, serial_timeout_seconds=3,
                  shutter_timeout_seconds=60,
-                 command_delay_seconds=0.5, legacy_controller=False,
+                 command_delay_seconds=0.5, step_command_delay_seconds=2.0, legacy_controller=False,
                  heartbeat_port=None, heartbeat_baud=9600, heartbeat_timeout_seconds=3):
         self.log_name = log_name
         self.daemon = daemon
@@ -43,6 +43,7 @@ class DomeConfig:
         self.serial_baud = serial_baud
         self.serial_timeout_seconds = serial_timeout_seconds
         self.command_delay_seconds = command_delay_seconds
+        self.step_command_delay_seconds = step_command_delay_seconds
         self.shutter_timeout_seconds = shutter_timeout_seconds
         self.legacy_controller = legacy_controller
         self.heartbeat_port = heartbeat_port
@@ -139,8 +140,9 @@ class DomeDaemon:
                     # The older non-PLC controllers will only return A/B/X/Y status bytes in
                     # response to an issued move command. We therefore need to try closing a
                     # step to find out where the shutters are now
-                    self.__move_shutter('A', lambda runtime: True)
-                    self.__move_shutter('B', lambda runtime: True)
+                    step_once = lambda s: True
+                    self.__move_shutter('A', step_once, self._config.command_delay_seconds, 0)
+                    self.__move_shutter('B', step_once, self._config.command_delay_seconds, 0)
 
                 # Main run loop
                 while True:
@@ -276,8 +278,11 @@ class DomeDaemon:
                                 # it is closing the dome, so we don't know for sure what the current
                                 # status of the dome is now. Issue another close step so that we can
                                 # receive a new status update
-                                self.__move_shutter('A', lambda runtime: True)
-                                self.__move_shutter('B', lambda runtime: True)
+                                step_once = lambda s: True
+                                self.__move_shutter('A', step_once,
+                                                    self._config.command_delay_seconds, 0)
+                                self.__move_shutter('B', step_once,
+                                                    self._config.command_delay_seconds, 0)
                             self._heartbeat_status = DomeHeartbeatStatus.TrippedIdle
                         elif status == 0:
                             if self._heartbeat_status != DomeHeartbeatStatus.Disabled:
@@ -302,60 +307,86 @@ class DomeDaemon:
                                       + str(exception) + ')')
                 time.sleep(5.)
 
-    def __move_shutter(self, command, at_requested_limit):
+    def __move_shutter(self, command, at_requested_limit, step_delay, timeout):
         """Issues a dome command and blocks until the final state is reached (or timeout)"""
         starttime = datetime.datetime.utcnow()
+        step_count = 0
         while True:
             try:
                 length = self._port.write(command.encode('ascii'))
                 if length != 1:
                     raise serial.SerialException('Failed to send command ' + command)
+                step_count += 1
             except Exception as exception:
                 observatory.log.error(self._config.log_name, 'Failed to send serial command (' \
                                       + str(exception) + ')')
-            time.sleep(self._config.command_delay_seconds)
+            time.sleep(step_delay)
             runtime = (datetime.datetime.utcnow() - starttime).total_seconds()
             heartbeat_tripped = self._heartbeat_status == DomeHeartbeatStatus.TrippedClosing or \
                 self._heartbeat_status == DomeHeartbeatStatus.TrippedIdle
-            at_limit = at_requested_limit(runtime)
+            at_limit = at_requested_limit(step_count)
             if self._force_stopped or heartbeat_tripped or at_limit \
-                    or runtime > self._config.shutter_timeout_seconds:
+                    or (timeout > 0 and runtime > timeout):
                 break
 
         return not self._force_stopped and not heartbeat_tripped and at_limit
 
-    def __open_shutters(self, east, west):
+    def __open_shutters(self, east, west, steps=0):
         """Open the requested shutters"""
         success = True
 
+        # If moving a fixed number of steps then we must wait for the shutters
+        # to stop moving between each step command to ensure the step size is constant
+        step_delay = self._config.step_command_delay_seconds if steps > 0 \
+            else self._config.command_delay_seconds
+
+        # If moving a fixed number of steps then the timeout is implicit
+        # (step_command_delay_seconds * steps)
+        timeout = 0 if steps > 0 else self._config.shutter_timeout_seconds
+
         # TODO: Check the wind direction and open the downwind shutter first
         if east:
-            at_requested_limit = lambda runtime: self._east_shutter == DomeShutterStatus.Open
-            success = success and self.__move_shutter('a', at_requested_limit)
+            at_requested_limit = lambda s: self._east_shutter == DomeShutterStatus.Open \
+                or (steps > 0 and s >= steps)
+
+            success = success and self.__move_shutter('a', at_requested_limit, step_delay, timeout)
 
         if west:
-            at_requested_limit = lambda runtime: self._west_shutter == DomeShutterStatus.Open
-            success = success and self.__move_shutter('b', at_requested_limit)
+            at_requested_limit = lambda s: self._west_shutter == DomeShutterStatus.Open \
+                or (steps > 0 and s >= steps)
+            success = success and self.__move_shutter('b', at_requested_limit, step_delay, timeout)
         return success
 
-    def __close_shutters(self, east, west):
+    def __close_shutters(self, east, west, steps=0):
         """Close the requested shutters"""
         success = True
 
+        # If moving a fixed number of steps then we must wait for the shutters
+        # to stop moving between each step command to ensure the step size is constant
+        step_delay = self._config.step_command_delay_seconds if steps > 0 \
+            else self._config.command_delay_seconds
+
+        # If moving a fixed number of steps then the timeout is implicit
+        # (step_command_delay_seconds * steps)
+        timeout = 0 if steps > 0 else self._config.shutter_timeout_seconds
+
         # TODO: Check the wind direction and close the upwind shutter first
         if east:
-            at_requested_limit = lambda runtime: self._east_shutter == DomeShutterStatus.Closed
-            success = success and self.__move_shutter('A', at_requested_limit)
+            at_requested_limit = lambda s: self._east_shutter == DomeShutterStatus.Closed \
+                or (steps > 0 and s >= steps)
+            success = success and self.__move_shutter('A', at_requested_limit, step_delay, timeout)
 
         if west:
-            at_requested_limit = lambda runtime: self._west_shutter == DomeShutterStatus.Closed
-            success = success and self.__move_shutter('B', at_requested_limit)
+            at_requested_limit = lambda s: self._west_shutter == DomeShutterStatus.Closed \
+                or (steps > 0 and s >= steps)
+            success = success and self.__move_shutter('B', at_requested_limit, step_delay, timeout)
         return success
 
     @Pyro4.expose
-    def open_shutters(self, east=False, west=False):
+    def open_shutters(self, east=False, west=False, steps=0):
         """Opens the requested shutter.
-           Returns once the requested shutters reach their limits or the command times out."""
+           Returns once the requested shutters reach their limits or the command times out.
+           If steps is greater than zero then open the defined number of steps with longer delay"""
         if self._heartbeat_status == DomeHeartbeatStatus.TrippedClosing:
             return CommandStatus.HeartbeatCloseInProgress
 
@@ -372,7 +403,7 @@ class DomeDaemon:
                 shutter = 'east' if east else 'west'
                 observatory.log.info(self._config.log_name, 'Opening ' + shutter + ' shutter')
 
-            if not self.__open_shutters(east, west):
+            if not self.__open_shutters(east, west, steps):
                 observatory.log.error(self._config.log_name, 'Failed to open dome')
                 return CommandStatus.Failed
 
@@ -380,7 +411,7 @@ class DomeDaemon:
             return CommandStatus.Succeeded
 
     @Pyro4.expose
-    def close_shutters(self, east=False, west=False):
+    def close_shutters(self, east=False, west=False, steps=0):
         """Closes the requested shutter.
            Returns once the requested shutters reach their limits or the command times out."""
         if self._heartbeat_status == DomeHeartbeatStatus.TrippedClosing:
@@ -399,7 +430,7 @@ class DomeDaemon:
                 shutter = 'east' if east else 'west'
                 observatory.log.info(self._config.log_name, 'Closing ' + shutter + ' shutter')
 
-            if not self.__close_shutters(east, west):
+            if not self.__close_shutters(east, west, steps):
                 observatory.log.error(self._config.log_name, 'Failed to close dome')
                 return CommandStatus.Failed
 

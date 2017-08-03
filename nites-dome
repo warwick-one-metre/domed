@@ -115,29 +115,31 @@ def stop():
 def open_dome(args):
     """Opens the dome shutters"""
     if len(args) > 0:
+        steps = int(args[1]) if len(args) > 1 else 0
         with observatory.daemons.nites_dome.connect(timeout=0) as dome:
             if args[0] == 'south':
-                return dome.open_shutters(east=True)
+                return dome.open_shutters(east=True, steps=steps)
             if args[0] == 'north':
-                return dome.open_shutters(west=True)
+                return dome.open_shutters(west=True, steps=steps)
             if args[0] == 'both':
-                return dome.open_shutters(east=True, west=True)
+                return dome.open_shutters(east=True, west=True, steps=steps)
 
-    print('usage: {} open (north|south|both)'.format(SCRIPT_NAME))
+    print('usage: {} open (north|south|both) [<steps>]'.format(SCRIPT_NAME))
     return -1
 
 def close_dome(args):
     """Closes the dome shutters"""
     if len(args) > 0:
+        steps = int(args[1]) if len(args) > 1 else 0
         with observatory.daemons.nites_dome.connect(timeout=0) as dome:
             if args[0] == 'south':
-                return dome.close_shutters(east=True)
+                return dome.close_shutters(east=True, steps=steps)
             if args[0] == 'north':
-                return dome.close_shutters(west=True)
+                return dome.close_shutters(west=True, steps=steps)
             if args[0] == 'both':
-                return dome.close_shutters(east=True, west=True)
+                return dome.close_shutters(east=True, west=True, steps=steps)
 
-    print('usage: {} close (north|south|both)'.format(SCRIPT_NAME))
+    print('usage: {} close (north|south|both) [<steps>]'.format(SCRIPT_NAME))
     return -1
 
 def heartbeat(args):
