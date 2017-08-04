@@ -374,15 +374,16 @@ class DomeDaemon:
         timeout = 0 if steps > 0 else self._config.shutter_timeout_seconds
 
         # TODO: Check the wind direction and close the upwind shutter first
+        if west:
+            at_requested_limit = lambda s: self._west_shutter == DomeShutterStatus.Closed \
+                or (steps > 0 and s >= steps)
+            success = success and self.__move_shutter('B', at_requested_limit, step_delay, timeout)
+
         if east:
             at_requested_limit = lambda s: self._east_shutter == DomeShutterStatus.Closed \
                 or (steps > 0 and s >= steps)
             success = success and self.__move_shutter('A', at_requested_limit, step_delay, timeout)
 
-        if west:
-            at_requested_limit = lambda s: self._west_shutter == DomeShutterStatus.Closed \
-                or (steps > 0 and s >= steps)
-            success = success and self.__move_shutter('B', at_requested_limit, step_delay, timeout)
         return success
 
     @Pyro4.expose
