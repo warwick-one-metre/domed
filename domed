@@ -62,9 +62,6 @@ DOME_CONFIG = {
                         heartbeat_port='COM9')
 }
 
-# Length of time to close the east shutter to clear the hatch
-HATCH_ACCESS_CLOSE_TIME = datetime.timedelta(seconds=15)
-
 # This should be kept in sync with the dictionary in dome
 class CommandStatus:
     """Numeric return codes"""
@@ -76,7 +73,6 @@ class CommandStatus:
     HeartbeatCloseInProgress = 4
     HeartbeatUnavailable = 5
     HeartbeatInvalidTimeout = 6
-    EastShutterMustBeFullyOpen = 10
 
 class DomeShutterStatus:
     """Status of the dome shutters"""
@@ -443,36 +439,6 @@ class DomeDaemon:
         # Heartbeat monitor represents time using half-second ticks
         length = self._heartbeat_port.write(chr(2 * timeout).encode('ascii'))
         return CommandStatus.Succeeded if length == 1 else CommandStatus.Failed
-
-    @Pyro4.expose
-    def access_hatch(self):
-        """Closes the requested shutter.
-           Returns once the requested shutters reach their limits or the command times out."""
-        if self._heartbeat_status == DomeHeartbeatStatus.TrippedClosing:
-            return CommandStatus.HeartbeatCloseInProgress
-
-        if self._heartbeat_status == DomeHeartbeatStatus.TrippedIdle:
-            return CommandStatus.HeartbeatTimedOut
-
-        with TryLock(self._command_lock) as success:
-            if not success:
-                return CommandStatus.Blocked
-
-            if self._east_shutter != DomeShutterStatus.Open:
-                return CommandStatus.EastShutterMustBeFullyOpen
-
-            observatory.log.info(self._config.log_name, 'Received hatch access command')
-
-            # Close the east shutter just enough to clear the hatch
-            at_requested_limit = lambda runtime: runtime > HATCH_ACCESS_CLOSE_TIME
-            if not self.__move_shutter('A', at_requested_limit):
-                observatory.log.error(self._config.log_name,
-                                      'Failed to move the shutter to clear the hatch')
-                return CommandStatus.Failed
-
-            observatory.log.info(self._config.log_name,
-                                 'Shutter has been moved to clear the hatch')
-            return CommandStatus.Succeeded
 
     @Pyro4.expose
     def status(self):
