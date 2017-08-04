@@ -58,7 +58,7 @@ DOME_CONFIG = {
                         observatory.daemons.nites_dome,
                         serial_port='COM8',
                         serial_timeout_seconds=0.5,
-                        shutter_timeout_seconds=8.5,
+                        shutter_timeout_seconds=10.5,
                         legacy_controller=True,
                         heartbeat_port='COM9')
 }
