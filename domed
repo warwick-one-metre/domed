@@ -74,6 +74,8 @@ class CommandStatus:
     HeartbeatCloseInProgress = 4
     HeartbeatUnavailable = 5
     HeartbeatInvalidTimeout = 6
+    EngineeringModeRequiresHeartbeatDisabled = 7
+    EngineeringModeActive = 8
 
 class DomeShutterStatus:
     """Status of the dome shutters"""
@@ -96,6 +98,7 @@ class DomeDaemon:
 
         self._command_lock = threading.Lock()
         self._force_stopped = False
+        self._engineering_mode = False
 
         runloop = threading.Thread(target=self.__monitor_dome_status)
         runloop.daemon = True
@@ -387,6 +390,9 @@ class DomeDaemon:
         """Opens the requested shutter.
            Returns once the requested shutters reach their limits or the command times out.
            If steps is greater than zero then open the defined number of steps with longer delay"""
+        if self._engineering_mode:
+            return CommandStatus.EngineeringModeActive
+
         if self._heartbeat_status == DomeHeartbeatStatus.TrippedClosing:
             return CommandStatus.HeartbeatCloseInProgress
 
@@ -414,6 +420,9 @@ class DomeDaemon:
     def close_shutters(self, east=False, west=False, steps=0):
         """Closes the requested shutter.
            Returns once the requested shutters reach their limits or the command times out."""
+        if self._engineering_mode:
+            return CommandStatus.EngineeringModeActive
+
         if self._heartbeat_status == DomeHeartbeatStatus.TrippedClosing:
             return CommandStatus.HeartbeatCloseInProgress
 
@@ -453,8 +462,27 @@ class DomeDaemon:
         return CommandStatus.Succeeded
 
     @Pyro4.expose
+    def set_engineering_mode(self, enabled):
+        """Enable engineering mode (all movement commands disabled)"""
+        with TryLock(self._command_lock) as success:
+            if not success:
+                return CommandStatus.Blocked
+
+            if self._heartbeat_status == DomeHeartbeatStatus.TrippedClosing:
+                return CommandStatus.HeartbeatCloseInProgress
+
+            if self._heartbeat_status == DomeHeartbeatStatus.Active:
+                return CommandStatus.EngineeringModeRequiresHeartbeatDisabled
+
+            self._engineering_mode = enabled
+            return CommandStatus.Succeeded
+
+    @Pyro4.expose
     def set_heartbeat_timer(self, timeout):
         """Enable or disable the auto-close countdown"""
+        if self._engineering_mode:
+            return CommandStatus.EngineeringModeActive
+
         if self._heartbeat_status == DomeHeartbeatStatus.Unavailable:
             return CommandStatus.HeartbeatUnavailable
 
@@ -484,6 +512,7 @@ class DomeDaemon:
                 'east_shutter': self._east_shutter,
                 'west_shutter': self._west_shutter,
                 'closed': closed,
+                'engineering_mode': self._engineering_mode,
                 'heartbeat_date': heartbeat_date,
                 'heartbeat_status': self._heartbeat_status,
                 'heartbeat_remaining': self._heartbeat_time_remaining

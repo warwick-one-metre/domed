@@ -55,12 +55,15 @@ STATUS_CODES = {
     # General error codes
     1: 'error: command failed',
     2: 'error: another command is already running',
+
+    # dome specific codes
     3: 'error: heartbeat monitor has tripped',
     4: 'error: heartbeat monitor is closing the dome',
     5: 'error: heartbeat monitor is not available',
     6: 'error: heartbeat timeout must be less than 120s',
+    7: 'error: heartbeat monitor must be disabled before enabling engineering mode',
+    8: 'error: dome is in engineering mode',
 
-    # dome specific codes
     -100: 'error: terminated by user',
     -101: 'error: unable to communicate with dome daemon'
 }
@@ -93,10 +96,12 @@ def print_status():
 
     date = datetime.datetime.strptime(status['date'], '%Y-%m-%dT%H:%M:%SZ')
     heartbeat_date = datetime.datetime.strptime(status['heartbeat_date'], '%Y-%m-%dT%H:%M:%SZ')
+    eng_mode = FMT_RED  + 'ENABLED' if status['engineering_mode'] else FMT_GREEN + 'DISABLED'
 
     print('Dome status at: {0}'.format(FMT_BOLD + str(date) + FMT_CLEAR))
     print('  East shutter: {}'.format(STATUS_DESCRIPTIONS[status['east_shutter']]))
     print('  West shutter: {}'.format(STATUS_DESCRIPTIONS[status['west_shutter']]))
+    print('     Eng. mode: {}'.format(FMT_BOLD + eng_mode + FMT_CLEAR))
     print('Heartbeat status at: {0}'.format(FMT_BOLD + str(heartbeat_date) + FMT_CLEAR))
     print('       Monitor: ' + HEARTBEAT_MONITOR_STATUS[status['heartbeat_status']])
     if status['heartbeat_status'] == 1:
@@ -156,15 +161,29 @@ def heartbeat(args):
     print('usage: {} heartbeat (disable|enable)'.format(SCRIPT_NAME))
     return -1
 
+def engineering_mode(args):
+    """Enable or disable engineering mode to disable dome movement"""
+    if len(args) > 0:
+        with observatory.daemons.onemetre_dome.connect() as dome:
+            if args[0] == 'disable':
+                return dome.set_engineering_mode(False)
+
+            if args[0] == 'enable':
+                return dome.set_engineering_mode(True)
+
+    print('usage: {} engineering (disable|enable)'.format(SCRIPT_NAME))
+    return -1
+
 def print_usage(name):
     """Prints the utility help"""
     print('Usage: {} <command>'.format(name))
     print()
-    print('   status      print a human-readable summary of the dome status')
-    print('   open        open one or both shutters')
-    print('   close       close one or both shutters')
-    print('   stop        stop manual open/close command (excludes heartbeat)')
-    print('   heartbeat   configure the dome auto-close timeout')
+    print('   status        print a human-readable summary of the dome status')
+    print('   open          open one or both shutters')
+    print('   close         close one or both shutters')
+    print('   stop          stop manual open/close command (excludes heartbeat)')
+    print('   heartbeat     configure the dome auto-close timeout')
+    print('   engineering   enable or disable engineering mode')
     print()
 
     return 1
@@ -183,6 +202,8 @@ if __name__ == '__main__':
         run_command(stop)
     elif sys.argv[1] == 'heartbeat':
         run_command(lambda: heartbeat(sys.argv[2:]))
+    elif sys.argv[1] == 'engineering':
+        run_command(lambda: engineering_mode(sys.argv[2:]))
 
     # Command not found
     sys.exit(print_usage(SCRIPT_NAME))
