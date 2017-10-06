@@ -19,6 +19,9 @@
 
 # pylint: disable=too-few-public-methods
 # pylint: disable=too-many-instance-attributes
+# pylint: disable=too-many-branches
+# pylint: disable=too-many-statements
+# pylint: disable=too-many-arguments
 # pylint: disable=broad-except
 # pylint: disable=invalid-name
 
@@ -30,25 +33,11 @@ import Pyro4
 import serial
 import warwick.observatory as observatory
 from warwick.observatory import TryLock
-
-class DomeConfig:
-    """Helper class containing dome configuration values"""
-    def __init__(self, log_name, daemon, serial_port, serial_baud=9600, serial_timeout_seconds=3,
-                 shutter_timeout_seconds=60,
-                 command_delay_seconds=0.5, step_command_delay_seconds=2.0, legacy_controller=False,
-                 heartbeat_port=None, heartbeat_baud=9600, heartbeat_timeout_seconds=3):
-        self.log_name = log_name
-        self.daemon = daemon
-        self.serial_port = serial_port
-        self.serial_baud = serial_baud
-        self.serial_timeout_seconds = serial_timeout_seconds
-        self.command_delay_seconds = command_delay_seconds
-        self.step_command_delay_seconds = step_command_delay_seconds
-        self.shutter_timeout_seconds = shutter_timeout_seconds
-        self.legacy_controller = legacy_controller
-        self.heartbeat_port = heartbeat_port
-        self.heartbeat_baud = heartbeat_baud
-        self.heartbeat_timeout_seconds = heartbeat_timeout_seconds
+from warwick.w1m.dome import (
+    DomeConfig,
+    CommandStatus,
+    DomeShutterStatus,
+    DomeHeartbeatStatus)
 
 DOME_CONFIG = {
     'onemetre': DomeConfig('onemetre_dome',
@@ -63,33 +52,12 @@ DOME_CONFIG = {
                         heartbeat_port='COM9')
 }
 
-# This should be kept in sync with the dictionary in dome
-class CommandStatus:
-    """Numeric return codes"""
-    # General error codes
-    Succeeded = 0
-    Failed = 1
-    Blocked = 2
-    HeartbeatTimedOut = 3
-    HeartbeatCloseInProgress = 4
-    HeartbeatUnavailable = 5
-    HeartbeatInvalidTimeout = 6
-    EngineeringModeRequiresHeartbeatDisabled = 7
-    EngineeringModeActive = 8
-
-class DomeShutterStatus:
-    """Status of the dome shutters"""
-    Closed, Open, PartiallyOpen, Opening, Closing, HeartbeatMonitorForceClosing = range(6)
-
-class DomeHeartbeatStatus:
-    """Status of the dome heartbeat monitoring"""
-    Disabled, Active, TrippedClosing, TrippedIdle, Unavailable = range(5)
-
 class DomeDaemon:
     """Daemon class that wraps the RS232 interface"""
     def __init__(self, config):
         self._config = config
         self._port = None
+        self._port_error = False
 
         self._status_lock = threading.Lock()
         self._status_time = None
@@ -122,19 +90,23 @@ class DomeDaemon:
                 self._port = serial.Serial(self._config.serial_port,
                                            self._config.serial_baud,
                                            timeout=self._config.serial_timeout_seconds)
+                prefix = 'Restored' if self._port_error else 'Established'
+                observatory.log.info(self._config.log_name, prefix + ' serial connection to dome')
+                self._port_error = False
+
             except Exception as exception:
                 print(exception)
                 print('Will retry in 5 seconds...')
-                observatory.log.error(self._config.log_name,
-                                      'Failed to connect to serial port (' + str(exception) + ')')
+
+                if not self._port_error:
+                    observatory.log.error(self._config.log_name, 'Failed to connect to dome')
+
+                print('Failed to connect to serial port (' + str(exception) + ')')
+                self._port_error = True
                 time.sleep(5.)
                 continue
 
             try:
-                print('Connected to dome on', self._config.serial_port)
-                observatory.log.info(self._config.log_name,
-                                     'Connected to dome on ' + self._config.serial_port)
-
                 # Flush any stale state
                 self._port.flushInput()
                 self._port.flushOutput()
@@ -151,7 +123,7 @@ class DomeDaemon:
                 while True:
                     data = self._port.read(1)
 
-                    if len(data) == 0:
+                    if not data:
                         if self._config.legacy_controller:
                             # Legacy controllers only send data in response to a move command
                             continue
@@ -164,14 +136,16 @@ class DomeDaemon:
 
             except Exception as exception:
                 self._port.close()
-                print(exception)
+
+                print('Failed to read to serial port (' + str(exception) + ')')
                 print('Will retry in 5 seconds...')
-                observatory.log.error(self._config.log_name, 'Failed to read serial port (' \
-                                      + str(exception) + ')')
+                if not self._port_error:
+                    observatory.log.error(self._config.log_name, 'Failed to read from dome')
+
+                self._port_error = True
                 time.sleep(5.)
 
     def __parse_status(self, status):
-    # pylint: disable=too-many-branches
         if status == ord('0'):
             self._east_shutter = DomeShutterStatus.Closed
             self._west_shutter = DomeShutterStatus.Closed
@@ -220,35 +194,36 @@ class DomeDaemon:
             print('Unknown status code: {0}'.format(status))
             observatory.log.error(self._config.log_name, 'Unknown dome status code ' \
                                                          + str(status))
-    # pylint: enable=too-many-branches
 
     def __monitor_heartbeat(self):
         """Monitors the heartbeat timer and close the dome if it expires"""
+        first_connection = True
         while True:
             # Initial setup
             try:
                 self._heartbeat_port = serial.Serial(self._config.heartbeat_port,
                                                      self._config.heartbeat_baud,
                                                      timeout=self._config.heartbeat_timeout_seconds)
+
+                print('Connected to heartbeat monitor on', self._config.heartbeat_port)
+                was_error = self._heartbeat_status == DomeHeartbeatStatus.Unavailable
+                prefix = 'Established' if first_connection else 'Restored'
+                observatory.log.info(self._config.log_name,
+                                     prefix + ' USB connection to heartbeat monitor')
+                first_connection = False
             except Exception as exception:
                 print('Failed to open heartbeat monitor connection with error:')
                 print(exception)
                 print('Will retry in 5 seconds...')
                 if self._heartbeat_status != DomeHeartbeatStatus.Unavailable:
                     observatory.log.error(self._config.log_name,
-                                          'Failed to connect to heartbeat monitor (' \
-                                          + str(exception) + ')')
+                                          'Failed to connect to heartbeat monitor')
                 time.sleep(5.)
 
                 self._heartbeat_status = DomeHeartbeatStatus.Unavailable
                 continue
 
             try:
-                print('Connected to heartbeat monitor on', self._config.heartbeat_port)
-                observatory.log.info(self._config.log_name,
-                                     'Connected to heartbeat monitor on ' \
-                                     + self._config.heartbeat_port)
-
                 # Flush any stale state
                 self._heartbeat_port.flushInput()
                 self._heartbeat_port.flushOutput()
@@ -257,7 +232,7 @@ class DomeDaemon:
                 # Main run loop
                 while True:
                     data = self._heartbeat_port.read(1)
-                    if len(data) == 0:
+                    if not data:
                         raise serial.SerialTimeoutException('Read timeout')
 
                     status = data[-1]
@@ -273,7 +248,7 @@ class DomeDaemon:
                             self._status_time = datetime.datetime.utcnow()
                         elif status == 255:
                             if self._heartbeat_status != DomeHeartbeatStatus.TrippedIdle:
-                                observatory.log.error(self._config.log_name,
+                                observatory.log.info(self._config.log_name,
                                                       'Heartbeat monitor has finished closing dome')
                             if self._heartbeat_status != DomeHeartbeatStatus.TrippedIdle \
                                     and self._config.legacy_controller:
@@ -306,8 +281,7 @@ class DomeDaemon:
                 self._heartbeat_status = DomeHeartbeatStatus.Unavailable
                 print(exception)
                 print('Will retry in 5 seconds...')
-                observatory.log.error(self._config.log_name, 'Failed to read heartbeat monitor (' \
-                                      + str(exception) + ')')
+                observatory.log.error(self._config.log_name, 'Failed to read heartbeat monitor')
                 time.sleep(5.)
 
     def __move_shutter(self, command, at_requested_limit, step_delay, timeout):
@@ -523,5 +497,5 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Dome daemon')
     parser.add_argument('dome', choices=DOME_CONFIG.keys(), help='Telescope')
     args = parser.parse_args()
-    config = DOME_CONFIG[args.dome]
-    config.daemon.launch(DomeDaemon(config))
+    dome = DOME_CONFIG[args.dome]
+    dome.daemon.launch(DomeDaemon(dome))

@@ -22,6 +22,10 @@ import os
 import sys
 import Pyro4
 import warwick.observatory as observatory
+from warwick.w1m.dome import (
+    CommandStatus,
+    DomeShutterStatus,
+    DomeHeartbeatStatus)
 
 SCRIPT_NAME = os.path.basename(sys.argv[0])
 sys.excepthook = Pyro4.util.excepthook
@@ -32,41 +36,6 @@ FMT_CYAN = u'\033[96m'
 FMT_YELLOW = u'\033[93m'
 FMT_BOLD = u'\033[1m'
 FMT_CLEAR = u'\033[0m'
-
-STATUS_DESCRIPTIONS = {
-    0: FMT_RED + FMT_BOLD + 'CLOSED' + FMT_CLEAR,
-    1: FMT_GREEN + FMT_BOLD + 'OPEN' + FMT_CLEAR,
-    2: FMT_CYAN + FMT_BOLD + 'PARTIALLY OPEN' + FMT_CLEAR,
-    3: FMT_YELLOW + FMT_BOLD + 'OPENING' + FMT_CLEAR,
-    4: FMT_YELLOW + FMT_BOLD + 'CLOSING' + FMT_CLEAR,
-    5: FMT_RED + FMT_BOLD + 'FORCE CLOSING' + FMT_CLEAR,
-}
-
-HEARTBEAT_MONITOR_STATUS = {
-    0: FMT_BOLD + 'DISABLED' + FMT_CLEAR,
-    1: FMT_GREEN + FMT_BOLD + 'ACTIVE' + FMT_CLEAR,
-    2: FMT_RED + FMT_BOLD + 'CLOSING DOME' + FMT_CLEAR,
-    3: FMT_RED + FMT_BOLD + 'TRIPPED' + FMT_CLEAR,
-    4: FMT_YELLOW + FMT_BOLD + 'UNAVAILABLE' + FMT_CLEAR,
-}
-
-# This should be kept in sync with the class in domed
-STATUS_CODES = {
-    # General error codes
-    1: 'error: command failed',
-    2: 'error: another command is already running',
-
-    # dome specific codes
-    3: 'error: heartbeat monitor has tripped',
-    4: 'error: heartbeat monitor is closing the dome',
-    5: 'error: heartbeat monitor is not available',
-    6: 'error: heartbeat timeout must be less than 120s',
-    7: 'error: heartbeat monitor must be disabled before enabling engineering mode',
-    8: 'error: dome is in engineering mode',
-
-    -100: 'error: terminated by user',
-    -101: 'error: unable to communicate with dome daemon'
-}
 
 def run_command(command):
     """Prints the message associated with a status code and returns the code"""
@@ -83,10 +52,8 @@ def run_command(command):
         ret = -101
 
     # Print message associated with error codes, except for -1 (error handled locally)
-    if ret in STATUS_CODES:
-        print(STATUS_CODES[ret])
-    elif ret != -1 and ret != 0:
-        print('Returned unknown status code: {0}'.format(ret))
+    if ret != -1 and ret != 0:
+        print(CommandStatus.message(ret))
     sys.exit(ret)
 
 def print_status():
@@ -99,11 +66,11 @@ def print_status():
     eng_mode = FMT_RED  + 'ENABLED' if status['engineering_mode'] else FMT_GREEN + 'DISABLED'
 
     print('Dome status at: {0}'.format(FMT_BOLD + str(date) + FMT_CLEAR))
-    print('  East shutter: {}'.format(STATUS_DESCRIPTIONS[status['east_shutter']]))
-    print('  West shutter: {}'.format(STATUS_DESCRIPTIONS[status['west_shutter']]))
+    print('  East shutter: {}'.format(DomeShutterStatus.label(status['east_shutter'])))
+    print('  West shutter: {}'.format(DomeShutterStatus.label(status['west_shutter'])))
     print('     Eng. mode: {}'.format(FMT_BOLD + eng_mode + FMT_CLEAR))
     print('Heartbeat status at: {0}'.format(FMT_BOLD + str(heartbeat_date) + FMT_CLEAR))
-    print('       Monitor: ' + HEARTBEAT_MONITOR_STATUS[status['heartbeat_status']])
+    print('       Monitor: ' + DomeHeartbeatStatus.label(status['heartbeat_status']))
     if status['heartbeat_status'] == 1:
         print('Time remaining: {}'.format(FMT_BOLD + str(status['heartbeat_remaining']) \
               + FMT_CLEAR))
@@ -116,7 +83,7 @@ def stop():
 
 def open_dome(args):
     """Opens the dome shutters"""
-    if len(args) > 0:
+    if args:
         steps = int(args[1]) if len(args) > 1 else 0
         with observatory.daemons.onemetre_dome.connect(timeout=0) as dome:
             if args[0] == 'east':
@@ -131,7 +98,7 @@ def open_dome(args):
 
 def close_dome(args):
     """Closes the dome shutters"""
-    if len(args) > 0:
+    if args:
         steps = int(args[1]) if len(args) > 1 else 0
         with observatory.daemons.onemetre_dome.connect(timeout=0) as dome:
             if args[0] == 'east':
@@ -146,7 +113,7 @@ def close_dome(args):
 
 def heartbeat(args):
     """Configure the dome close heartbeat"""
-    if len(args) > 0:
+    if args:
         with observatory.daemons.onemetre_dome.connect() as dome:
             if args[0] == 'disable':
                 return dome.set_heartbeat_timer(0)
@@ -163,7 +130,7 @@ def heartbeat(args):
 
 def engineering_mode(args):
     """Enable or disable engineering mode to disable dome movement"""
-    if len(args) > 0:
+    if args:
         with observatory.daemons.onemetre_dome.connect() as dome:
             if args[0] == 'disable':
                 return dome.set_engineering_mode(False)
@@ -207,4 +174,3 @@ if __name__ == '__main__':
 
     # Command not found
     sys.exit(print_usage(SCRIPT_NAME))
-
