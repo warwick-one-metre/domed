@@ -31,8 +31,10 @@ import threading
 import time
 import Pyro4
 import serial
-import warwick.observatory as observatory
-from warwick.observatory import TryLock
+from warwick.observatory.common import (
+    daemons,
+    log,
+    TryLock)
 from warwick.w1m.dome import (
     DomeConfig,
     CommandStatus,
@@ -41,10 +43,11 @@ from warwick.w1m.dome import (
 
 DOME_CONFIG = {
     'onemetre': DomeConfig('onemetre_dome',
-                           observatory.daemons.onemetre_dome,
-                           serial_port='/dev/ttyS0'),
+                           daemons.onemetre_dome,
+                           serial_port='/dev/dome',
+                           heartbeat_port='/dev/dome-monitor'),
     'nites': DomeConfig('nites_dome',
-                        observatory.daemons.nites_dome,
+                        daemons.nites_dome,
                         serial_port='COM8',
                         serial_timeout_seconds=0.5,
                         shutter_timeout_seconds=10.5,
@@ -91,7 +94,7 @@ class DomeDaemon:
                                            self._config.serial_baud,
                                            timeout=self._config.serial_timeout_seconds)
                 prefix = 'Restored' if self._port_error else 'Established'
-                observatory.log.info(self._config.log_name, prefix + ' serial connection to dome')
+                log.info(self._config.log_name, prefix + ' serial connection to dome')
                 self._port_error = False
 
             except Exception as exception:
@@ -99,7 +102,7 @@ class DomeDaemon:
                 print('Will retry in 5 seconds...')
 
                 if not self._port_error:
-                    observatory.log.error(self._config.log_name, 'Failed to connect to dome')
+                    log.error(self._config.log_name, 'Lost serial connection to dome')
 
                 print('Failed to connect to serial port (' + str(exception) + ')')
                 self._port_error = True
@@ -140,7 +143,7 @@ class DomeDaemon:
                 print('Failed to read to serial port (' + str(exception) + ')')
                 print('Will retry in 5 seconds...')
                 if not self._port_error:
-                    observatory.log.error(self._config.log_name, 'Failed to read from dome')
+                    log.error(self._config.log_name, 'Lost serial connection to dome')
 
                 self._port_error = True
                 time.sleep(5.)
@@ -192,8 +195,7 @@ class DomeDaemon:
             self._west_shutter = DomeShutterStatus.Open
         else:
             print('Unknown status code: {0}'.format(status))
-            observatory.log.error(self._config.log_name, 'Unknown dome status code ' \
-                                                         + str(status))
+            log.error(self._config.log_name, 'Unknown dome status code ' + str(status))
 
     def __monitor_heartbeat(self):
         """Monitors the heartbeat timer and close the dome if it expires"""
@@ -206,18 +208,15 @@ class DomeDaemon:
                                                      timeout=self._config.heartbeat_timeout_seconds)
 
                 print('Connected to heartbeat monitor on', self._config.heartbeat_port)
-                was_error = self._heartbeat_status == DomeHeartbeatStatus.Unavailable
                 prefix = 'Established' if first_connection else 'Restored'
-                observatory.log.info(self._config.log_name,
-                                     prefix + ' USB connection to heartbeat monitor')
+                log.info(self._config.log_name, prefix + ' USB connection to heartbeat monitor')
                 first_connection = False
             except Exception as exception:
                 print('Failed to open heartbeat monitor connection with error:')
                 print(exception)
                 print('Will retry in 5 seconds...')
                 if self._heartbeat_status != DomeHeartbeatStatus.Unavailable:
-                    observatory.log.error(self._config.log_name,
-                                          'Failed to connect to heartbeat monitor')
+                    log.error(self._config.log_name, 'Failed to connect to heartbeat monitor')
                 time.sleep(5.)
 
                 self._heartbeat_status = DomeHeartbeatStatus.Unavailable
@@ -240,16 +239,16 @@ class DomeDaemon:
                         self._heartbeat_time_remaining = 0
                         if status == 254:
                             if self._heartbeat_status != DomeHeartbeatStatus.TrippedClosing:
-                                observatory.log.error(self._config.log_name,
-                                                      'Heartbeat monitor is closing dome')
+                                log.error(self._config.log_name,
+                                          'Heartbeat monitor is closing dome')
                             self._heartbeat_status = DomeHeartbeatStatus.TrippedClosing
                             self._east_shutter = DomeShutterStatus.HeartbeatMonitorForceClosing
                             self._west_shutter = DomeShutterStatus.HeartbeatMonitorForceClosing
                             self._status_time = datetime.datetime.utcnow()
                         elif status == 255:
                             if self._heartbeat_status != DomeHeartbeatStatus.TrippedIdle:
-                                observatory.log.info(self._config.log_name,
-                                                      'Heartbeat monitor has finished closing dome')
+                                log.info(self._config.log_name,
+                                         'Heartbeat monitor has finished closing dome')
                             if self._heartbeat_status != DomeHeartbeatStatus.TrippedIdle \
                                     and self._config.legacy_controller:
                                 # The heartbeat monitor disconnects the dome serial connection when
@@ -264,11 +263,11 @@ class DomeDaemon:
                             self._heartbeat_status = DomeHeartbeatStatus.TrippedIdle
                         elif status == 0:
                             if self._heartbeat_status != DomeHeartbeatStatus.Disabled:
-                                observatory.log.info(self._config.log_name, 'Heartbeat disabled')
+                                log.info(self._config.log_name, 'Heartbeat disabled')
                             self._heartbeat_status = DomeHeartbeatStatus.Disabled
                         else:
                             if self._heartbeat_status != DomeHeartbeatStatus.Active:
-                                observatory.log.info(self._config.log_name, 'Heartbeat enabled')
+                                log.info(self._config.log_name, 'Heartbeat enabled')
                             self._heartbeat_status = DomeHeartbeatStatus.Active
 
                             # Heartbeat monitor represents time using half-second ticks
@@ -281,7 +280,7 @@ class DomeDaemon:
                 self._heartbeat_status = DomeHeartbeatStatus.Unavailable
                 print(exception)
                 print('Will retry in 5 seconds...')
-                observatory.log.error(self._config.log_name, 'Failed to read heartbeat monitor')
+                log.error(self._config.log_name, 'Failed to read heartbeat monitor')
                 time.sleep(5.)
 
     def __move_shutter(self, command, at_requested_limit, step_delay, timeout):
@@ -295,8 +294,8 @@ class DomeDaemon:
                     raise serial.SerialException('Failed to send command ' + command)
                 step_count += 1
             except Exception as exception:
-                observatory.log.error(self._config.log_name, 'Failed to send serial command (' \
-                                      + str(exception) + ')')
+                log.error(self._config.log_name, 'Failed to send serial command (' \
+                          + str(exception) + ')')
             time.sleep(step_delay)
             runtime = (datetime.datetime.utcnow() - starttime).total_seconds()
             heartbeat_tripped = self._heartbeat_status == DomeHeartbeatStatus.TrippedClosing or \
@@ -379,16 +378,16 @@ class DomeDaemon:
                 return CommandStatus.Blocked
 
             if east and west:
-                observatory.log.info(self._config.log_name, 'Opening both shutters')
+                log.info(self._config.log_name, 'Opening both shutters')
             else:
                 shutter = 'east' if east else 'west'
-                observatory.log.info(self._config.log_name, 'Opening ' + shutter + ' shutter')
+                log.info(self._config.log_name, 'Opening ' + shutter + ' shutter')
 
             if not self.__open_shutters(east, west, steps):
-                observatory.log.error(self._config.log_name, 'Failed to open dome')
+                log.error(self._config.log_name, 'Failed to open dome')
                 return CommandStatus.Failed
 
-            observatory.log.info(self._config.log_name, 'Open complete')
+            log.info(self._config.log_name, 'Open complete')
             return CommandStatus.Succeeded
 
     @Pyro4.expose
@@ -409,16 +408,16 @@ class DomeDaemon:
                 return CommandStatus.Blocked
 
             if east and west:
-                observatory.log.info(self._config.log_name, 'Closing both shutters')
+                log.info(self._config.log_name, 'Closing both shutters')
             else:
                 shutter = 'east' if east else 'west'
-                observatory.log.info(self._config.log_name, 'Closing ' + shutter + ' shutter')
+                log.info(self._config.log_name, 'Closing ' + shutter + ' shutter')
 
             if not self.__close_shutters(east, west, steps):
-                observatory.log.error(self._config.log_name, 'Failed to close dome')
+                log.error(self._config.log_name, 'Failed to close dome')
                 return CommandStatus.Failed
 
-            observatory.log.info(self._config.log_name, 'Close complete')
+            log.info(self._config.log_name, 'Close complete')
             return CommandStatus.Succeeded
 
     @Pyro4.expose
@@ -427,7 +426,7 @@ class DomeDaemon:
         if self._heartbeat_status == DomeHeartbeatStatus.TrippedClosing:
             return CommandStatus.HeartbeatCloseInProgress
 
-        observatory.log.warning(self._config.log_name, 'Received stop command')
+        log.warning(self._config.log_name, 'Received stop command')
 
         # The stop command overrides all other commands
         self._force_stopped = True

@@ -12,19 +12,18 @@
 # license that conforms to the Open Source Definition (Version 1.9)
 # published by the Open Source Initiative.
 
-Name:           python3-warwick-w1m-dome
-Version:        1.0
+Name:           python34-warwick-w1m-dome
+Version:        2.0
 Release:        0
 License:        GPL3
 Summary:        Common backend code for the Warwick one-metre telescope dome daemon
-Url:            https://github.com/warwick-one-metre/
+Url:            https://github.com/warwick-one-metre/domed
 BuildArch:      noarch
-Requires:       python3-warwick-w1m-dome
 
 %description
 Part of the observatory software for the Warwick one-meter telescope.
 
-python3-warwick-w1m-dome holds the common dome code.
+python34-warwick-w1m-dome holds the common dome code.
 
 %prep
 
