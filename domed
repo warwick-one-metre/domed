@@ -470,7 +470,7 @@ class DomeDaemon:
             return CommandStatus.HeartbeatInvalidTimeout
 
         # Heartbeat monitor represents time using half-second ticks
-        length = self._heartbeat_port.write(chr(2 * timeout).encode('ascii'))
+        length = self._heartbeat_port.write(bytes([(2 * timeout)]))
         return CommandStatus.Succeeded if length == 1 else CommandStatus.Failed
 
     @Pyro4.expose
