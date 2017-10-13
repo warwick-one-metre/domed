@@ -23,12 +23,13 @@
 
 class DomeConfig:
     """Helper class containing dome configuration values"""
-    def __init__(self, log_name, daemon, serial_port, serial_baud=9600, serial_timeout_seconds=3,
-                 shutter_timeout_seconds=60,
+    def __init__(self, log_name, daemon, control_ips, serial_port,
+                 serial_baud=9600, serial_timeout_seconds=3, shutter_timeout_seconds=60,
                  command_delay_seconds=0.5, step_command_delay_seconds=2.0, legacy_controller=False,
                  heartbeat_port=None, heartbeat_baud=9600, heartbeat_timeout_seconds=3):
         self.log_name = log_name
         self.daemon = daemon
+        self.control_ips = control_ips
         self.serial_port = serial_port
         self.serial_baud = serial_baud
         self.serial_timeout_seconds = serial_timeout_seconds

@@ -17,11 +17,10 @@
 
 """Dome daemon for the Warwick one-metre telescope"""
 
-# pylint: disable=too-few-public-methods
 # pylint: disable=too-many-instance-attributes
 # pylint: disable=too-many-branches
 # pylint: disable=too-many-statements
-# pylint: disable=too-many-arguments
+# pylint: disable=too-many-return-statements
 # pylint: disable=broad-except
 # pylint: disable=invalid-name
 
@@ -34,7 +33,10 @@ import serial
 from warwick.observatory.common import (
     daemons,
     log,
+    IP,
     TryLock)
+from warwick.observatory.common.helpers import pyro_client_matches
+
 from warwick.w1m.dome import (
     DomeConfig,
     CommandStatus,
@@ -44,10 +46,12 @@ from warwick.w1m.dome import (
 DOME_CONFIG = {
     'onemetre': DomeConfig('onemetre_dome',
                            daemons.onemetre_dome,
+                           [IP.OneMetreDome, IP.OneMetreTCS],
                            serial_port='/dev/dome',
                            heartbeat_port='/dev/dome-monitor'),
     'nites': DomeConfig('nites_dome',
                         daemons.nites_dome,
+                        [IP.NitesMain],
                         serial_port='COM8',
                         serial_timeout_seconds=0.5,
                         shutter_timeout_seconds=10.5,
@@ -364,6 +368,9 @@ class DomeDaemon:
         """Opens the requested shutter.
            Returns once the requested shutters reach their limits or the command times out.
            If steps is greater than zero then open the defined number of steps with longer delay"""
+        if not pyro_client_matches(self._config.control_ips):
+            return CommandStatus.InvalidControlIP
+
         if self._engineering_mode:
             return CommandStatus.EngineeringModeActive
 
@@ -423,6 +430,9 @@ class DomeDaemon:
     @Pyro4.expose
     def stop(self):
         """Stops any active shutter movement"""
+        if not pyro_client_matches(self._config.control_ips):
+            return CommandStatus.InvalidControlIP
+
         if self._heartbeat_status == DomeHeartbeatStatus.TrippedClosing:
             return CommandStatus.HeartbeatCloseInProgress
 
@@ -438,6 +448,9 @@ class DomeDaemon:
     @Pyro4.expose
     def set_engineering_mode(self, enabled):
         """Enable engineering mode (all movement commands disabled)"""
+        if not pyro_client_matches(self._config.control_ips):
+            return CommandStatus.InvalidControlIP
+
         with TryLock(self._command_lock) as success:
             if not success:
                 return CommandStatus.Blocked
@@ -454,6 +467,9 @@ class DomeDaemon:
     @Pyro4.expose
     def set_heartbeat_timer(self, timeout):
         """Enable or disable the auto-close countdown"""
+        if not pyro_client_matches(self._config.control_ips):
+            return CommandStatus.InvalidControlIP
+
         if self._engineering_mode:
             return CommandStatus.EngineeringModeActive
 

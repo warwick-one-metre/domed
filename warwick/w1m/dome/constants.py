@@ -39,11 +39,13 @@ class CommandStatus:
     HeartbeatInvalidTimeout = 6
     EngineeringModeRequiresHeartbeatDisabled = 7
     EngineeringModeActive = 8
+    InvalidControlIP = 10
 
     _messages = {
         # General error codes
         1: 'error: command failed',
         2: 'error: another command is already running',
+        10: 'error: command not accepted from this IP',
 
         # dome specific codes
         3: 'error: heartbeat monitor has tripped',
