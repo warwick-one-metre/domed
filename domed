@@ -49,6 +49,17 @@ DOME_CONFIG = {
                            [IP.OneMetreDome, IP.OneMetreTCS],
                            serial_port='/dev/dome',
                            heartbeat_port='/dev/dome-monitor'),
+    'rasa': DomeConfig('rasa_dome',
+                           daemons.rasa_dome,
+                           [IP.RASAMain],
+                           shutter_timeout_seconds=40,
+                           command_delay_seconds=0.25,
+                           step_command_delay_seconds=2,
+                           # Open part way using steps to avoid belt slackening
+                           # then open the rest of the way normally
+                           slow_open_steps=5,
+                           serial_port='/dev/dome',
+                           heartbeat_port='/dev/dome-monitor'),
     'nites': DomeConfig('nites_dome',
                         daemons.nites_dome,
                         [IP.NitesMain],
@@ -291,8 +302,10 @@ class DomeDaemon:
         """Issues a dome command and blocks until the final state is reached (or timeout)"""
         starttime = datetime.datetime.utcnow()
         step_count = 0
+        print('delay is ', step_delay)
         while True:
             try:
+                print(step_count, command)
                 length = self._port.write(command.encode('ascii'))
                 if length != 1:
                     raise serial.SerialException('Failed to send command ' + command)
@@ -326,12 +339,24 @@ class DomeDaemon:
 
         # TODO: Check the wind direction and open the downwind shutter first
         if east:
+            # Open part way using steps
+            if steps == 0 and self._config.slow_open_steps > 0:
+                at_step_limit = lambda s: self._east_shutter == DomeShutterStatus.Open or s >= self._config.slow_open_steps
+                slow_delay = self._config.step_command_delay_seconds
+                success = success and self.__move_shutter('a', at_step_limit, slow_delay, 0)
+
             at_requested_limit = lambda s: self._east_shutter == DomeShutterStatus.Open \
                 or (steps > 0 and s >= steps)
 
             success = success and self.__move_shutter('a', at_requested_limit, step_delay, timeout)
 
         if west:
+            # Open part way using steps
+            if steps == 0 and self._config.slow_open_steps > 0:
+                at_step_limit = lambda s: self._west_shutter == DomeShutterStatus.Open or s >= self._config.slow_open_steps
+                slow_delay = self._config.step_command_delay_seconds
+                success = success and self.__move_shutter('b', at_step_limit, slow_delay, 0)
+
             at_requested_limit = lambda s: self._west_shutter == DomeShutterStatus.Open \
                 or (steps > 0 and s >= steps)
             success = success and self.__move_shutter('b', at_requested_limit, step_delay, timeout)

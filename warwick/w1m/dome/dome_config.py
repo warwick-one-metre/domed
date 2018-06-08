@@ -26,7 +26,8 @@ class DomeConfig:
     def __init__(self, log_name, daemon, control_ips, serial_port,
                  serial_baud=9600, serial_timeout_seconds=3, shutter_timeout_seconds=60,
                  command_delay_seconds=0.5, step_command_delay_seconds=2.0, legacy_controller=False,
-                 heartbeat_port=None, heartbeat_baud=9600, heartbeat_timeout_seconds=3):
+                 heartbeat_port=None, heartbeat_baud=9600, heartbeat_timeout_seconds=3,
+                 slow_open_steps=0):
         self.log_name = log_name
         self.daemon = daemon
         self.control_ips = control_ips
@@ -40,3 +41,4 @@ class DomeConfig:
         self.heartbeat_port = heartbeat_port
         self.heartbeat_baud = heartbeat_baud
         self.heartbeat_timeout_seconds = heartbeat_timeout_seconds
+        self.slow_open_steps = slow_open_steps
