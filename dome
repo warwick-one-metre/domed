@@ -58,7 +58,7 @@ def run_command(command):
 
 def print_status():
     """Prints the dome status in human-readable form"""
-    with daemons.onemetre_dome.connect() as dome:
+    with daemons.rasa_dome.connect() as dome:
         status = dome.status()
 
     date = datetime.datetime.strptime(status['date'], '%Y-%m-%dT%H:%M:%SZ')
@@ -78,14 +78,14 @@ def print_status():
 
 def stop():
     """Stops any active dome movement"""
-    with daemons.onemetre_dome.connect() as dome:
+    with daemons.rasa_dome.connect() as dome:
         return dome.stop()
 
 def open_dome(args):
     """Opens the dome shutters"""
     if args:
         steps = int(args[1]) if len(args) > 1 else 0
-        with daemons.onemetre_dome.connect(timeout=0) as dome:
+        with daemons.rasa_dome.connect(timeout=0) as dome:
             if args[0] == 'east':
                 return dome.open_shutters(east=True, steps=steps)
             if args[0] == 'west':
@@ -100,7 +100,7 @@ def close_dome(args):
     """Closes the dome shutters"""
     if args:
         steps = int(args[1]) if len(args) > 1 else 0
-        with daemons.onemetre_dome.connect(timeout=0) as dome:
+        with daemons.rasa_dome.connect(timeout=0) as dome:
             if args[0] == 'east':
                 return dome.close_shutters(east=True, steps=steps)
             if args[0] == 'west':
@@ -114,7 +114,7 @@ def close_dome(args):
 def heartbeat(args):
     """Configure the dome close heartbeat"""
     if args:
-        with daemons.onemetre_dome.connect() as dome:
+        with daemons.rasa_dome.connect() as dome:
             if args[0] == 'disable':
                 return dome.set_heartbeat_timer(0)
 
@@ -131,7 +131,7 @@ def heartbeat(args):
 def engineering_mode(args):
     """Enable or disable engineering mode to disable dome movement"""
     if args:
-        with daemons.onemetre_dome.connect() as dome:
+        with daemons.rasa_dome.connect() as dome:
             if args[0] == 'disable':
                 return dome.set_engineering_mode(False)
 
