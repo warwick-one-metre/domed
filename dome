@@ -27,6 +27,9 @@ from warwick.w1m.dome import (
     DomeShutterStatus,
     DomeHeartbeatStatus)
 
+# Set to the appropriate dome from the Makefile
+DOME = 'onemetre'
+
 SCRIPT_NAME = os.path.basename(sys.argv[0])
 sys.excepthook = Pyro4.util.excepthook
 
@@ -36,6 +39,24 @@ FMT_CYAN = u'\033[96m'
 FMT_YELLOW = u'\033[93m'
 FMT_BOLD = u'\033[1m'
 FMT_CLEAR = u'\033[0m'
+
+DAEMONS = {
+    'onemetre': daemons.onemetre_dome,
+    'rasa': daemons.rasa_dome,
+    'nites': daemons.nites_dome,
+}
+
+SIDE_A = {
+    'onemetre': 'east',
+    'rasa': 'south',
+    'nites': 'south',
+}
+
+SIDE_B = {
+    'onemetre': 'west',
+    'rasa': 'north',
+    'nites': 'north',
+}
 
 def run_command(command):
     """Prints the message associated with a status code and returns the code"""
@@ -58,16 +79,18 @@ def run_command(command):
 
 def print_status():
     """Prints the dome status in human-readable form"""
-    with daemons.rasa_dome.connect() as dome:
+    with DAEMONS[DOME].connect() as dome:
         status = dome.status()
 
     date = datetime.datetime.strptime(status['date'], '%Y-%m-%dT%H:%M:%SZ')
     heartbeat_date = datetime.datetime.strptime(status['heartbeat_date'], '%Y-%m-%dT%H:%M:%SZ')
     eng_mode = FMT_RED  + 'ENABLED' if status['engineering_mode'] else FMT_GREEN + 'DISABLED'
 
+    sa = SIDE_A[DOME].title()
+    sb = SIDE_B[DOME].title()
     print('Dome status at: {0}'.format(FMT_BOLD + str(date) + FMT_CLEAR))
-    print('  East shutter: {}'.format(DomeShutterStatus.label(status['east_shutter'])))
-    print('  West shutter: {}'.format(DomeShutterStatus.label(status['west_shutter'])))
+    print('  {} shutter: {}'.format(sa, DomeShutterStatus.label(status['east_shutter'])))
+    print('  {} shutter: {}'.format(sb, DomeShutterStatus.label(status['west_shutter'])))
     print('     Eng. mode: {}'.format(FMT_BOLD + eng_mode + FMT_CLEAR))
     print('Heartbeat status at: {0}'.format(FMT_BOLD + str(heartbeat_date) + FMT_CLEAR))
     print('       Monitor: ' + DomeHeartbeatStatus.label(status['heartbeat_status']))
@@ -85,36 +108,36 @@ def open_dome(args):
     """Opens the dome shutters"""
     if args:
         steps = int(args[1]) if len(args) > 1 else 0
-        with daemons.rasa_dome.connect(timeout=0) as dome:
-            if args[0] == 'east':
+        with DAEMONS[DOME].connect(timeout=0) as dome:
+            if args[0] == SIDE_A[DOME]:
                 return dome.open_shutters(east=True, steps=steps)
-            if args[0] == 'west':
+            if args[0] == SIDE_B[DOME]:
                 return dome.open_shutters(west=True, steps=steps)
             if args[0] == 'both':
                 return dome.open_shutters(east=True, west=True, steps=steps)
 
-    print('usage: {} open (east|west|both) [<steps>]'.format(SCRIPT_NAME))
+    print('usage: {} open ({}|{}|both) [<steps>]'.format(SCRIPT_NAME, SIDE_A[DOME], SIDE_B[DOME]))
     return -1
 
 def close_dome(args):
     """Closes the dome shutters"""
     if args:
         steps = int(args[1]) if len(args) > 1 else 0
-        with daemons.rasa_dome.connect(timeout=0) as dome:
-            if args[0] == 'east':
+        with DAEMONS[DOME].connect(timeout=0) as dome:
+            if args[0] == SIDE_A[DOME]:
                 return dome.close_shutters(east=True, steps=steps)
-            if args[0] == 'west':
+            if args[0] == SIDE_B[DOME]:
                 return dome.close_shutters(west=True, steps=steps)
             if args[0] == 'both':
                 return dome.close_shutters(east=True, west=True, steps=steps)
 
-    print('usage: {} close (east|west|both) [<steps>]'.format(SCRIPT_NAME))
+    print('usage: {} close ({}|{}|both) [<steps>]'.format(SCRIPT_NAME, SIDE_A[DOME], SIDE_B[DOME]))
     return -1
 
 def heartbeat(args):
     """Configure the dome close heartbeat"""
     if args:
-        with daemons.rasa_dome.connect() as dome:
+        with DAEMONS[DOME].connect() as dome:
             if args[0] == 'disable':
                 return dome.set_heartbeat_timer(0)
 
@@ -131,7 +154,7 @@ def heartbeat(args):
 def engineering_mode(args):
     """Enable or disable engineering mode to disable dome movement"""
     if args:
-        with daemons.rasa_dome.connect() as dome:
+        with DAEMONS[DOME].connect() as dome:
             if args[0] == 'disable':
                 return dome.set_engineering_mode(False)
 
