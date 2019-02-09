@@ -1,18 +1,13 @@
 Name:      onemetre-dome-server
-Version:   2.1.0
+Version:   2.2.0
 Release:   0
 Url:       https://github.com/warwick-one-metre/domed
 Summary:   Dome daemon for the Warwick one-metre telescope.
 License:   GPL-3.0
 Group:     Unspecified
 BuildArch: noarch
-%if 0%{?suse_version}
-Requires:  python3, python34-Pyro4, python34-pyserial, python34-warwick-observatory-common, python34-warwick-w1m-dome, observatory-log-client, %{?systemd_requires}
-BuildRequires: systemd-rpm-macros
-%endif
-%if 0%{?centos_ver}
-Requires:  python34, python34-Pyro4, python34-pyserial, python34-warwick-observatory-common, python34-warwick-w1m-dome, observatory-log-client, %{?systemd_requires}
-%endif
+Requires:  python36, python36-Pyro4, python36-pyserial, python36-warwick-observatory-common, python36-warwick-observatory-dome
+Requires:  observatory-log-client, %{?systemd_requires}
 
 %description
 Part of the observatory software for the Warwick one-meter telescope.
@@ -30,36 +25,14 @@ mkdir -p %{buildroot}%{_udevrulesdir}
 %{__install} %{_sourcedir}/10-onemetre-dome.rules %{buildroot}%{_udevrulesdir}
 %{__install} %{_sourcedir}/10-onemetre-dome-monitor.rules %{buildroot}%{_udevrulesdir}
 
-%pre
-%if 0%{?suse_version}
-%service_add_pre domed.service
-%endif
-
 %post
-%if 0%{?suse_version}
-%service_add_post domed.service
-%endif
-%if 0%{?centos_ver}
 %systemd_post domed.service
-%endif
 
 %preun
-%if 0%{?suse_version}
-%stop_on_removal domed.service
-%service_del_preun domed.service
-%endif
-%if 0%{?centos_ver}
 %systemd_preun domed.service
-%endif
 
 %postun
-%if 0%{?suse_version}
-%restart_on_update domed.service
-%service_del_postun domed.service
-%endif
-%if 0%{?centos_ver}
 %systemd_postun_with_restart domed.service
-%endif
 
 %files
 %defattr(0755,root,root,-)
@@ -69,4 +42,5 @@ mkdir -p %{buildroot}%{_udevrulesdir}
 %{_udevrulesdir}/10-onemetre-dome-monitor.rules
 %defattr(-,root,root,-)
 %{_unitdir}/domed.service
+
 %changelog
