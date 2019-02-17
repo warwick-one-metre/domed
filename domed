@@ -50,16 +50,17 @@ DOME_CONFIG = {
                            serial_port='/dev/dome',
                            heartbeat_port='/dev/dome-monitor'),
     'rasa': DomeConfig('rasa_dome',
-                           daemons.rasa_dome,
-                           [IP.RASAMain],
-                           shutter_timeout_seconds=40,
-                           command_delay_seconds=0.25,
-                           step_command_delay_seconds=2,
-                           # Open part way using steps to avoid belt slackening
-                           # then open the rest of the way normally
-                           slow_open_steps=5,
-                           serial_port='/dev/dome',
-                           heartbeat_port='/dev/dome-monitor'),
+                       daemons.rasa_dome,
+                       [IP.RASAMain],
+                       shutter_timeout_seconds=40,
+                       command_delay_seconds=0.25,
+                       step_command_delay_seconds=2,
+                       has_bumper_guard=True,
+                       # Open part way using steps to avoid belt slackening
+                       # then open the rest of the way normally
+                       slow_open_steps=5,
+                       serial_port='/dev/dome',
+                       heartbeat_port='/dev/dome-monitor'),
     'nites': DomeConfig('nites_dome',
                         daemons.nites_dome,
                         [IP.NitesMain],
@@ -208,6 +209,9 @@ class DomeDaemon:
             self._west_shutter = DomeShutterStatus.Closed
         elif status == ord('y'):
             self._west_shutter = DomeShutterStatus.Open
+        elif status == ord('R'):
+            print('Bumper guard relay reset')
+            log.error(self._config.log_name, 'Bumper guard relay reset')
         else:
             print('Unknown status code: {0}'.format(status))
             log.error(self._config.log_name, 'Unknown dome status code ' + str(status))
@@ -302,6 +306,17 @@ class DomeDaemon:
         """Issues a dome command and blocks until the final state is reached (or timeout)"""
         starttime = datetime.datetime.utcnow()
         step_count = 0
+
+        if self._config.has_bumper_guard:
+            try:
+                length = self._port.write('R'.encode('ascii'))
+                if length != 1:
+                    raise serial.SerialException('Failed to send command R')
+                time.sleep(step_delay)
+            except Exception as exception:
+                log.error(self._config.log_name, 'Failed to send serial command (' \
+                          + str(exception) + ')')
+
         while True:
             try:
                 length = self._port.write(command.encode('ascii'))
