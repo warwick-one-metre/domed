@@ -6,7 +6,7 @@ Part of the observatory software for the Warwick one-meter, NITES, and RASA prot
 
 `dome` is a commandline utility that provides access to the W1m dome.
 
-`python34-warwick-w1m-dome` is a python module with the common dome code.
+`python36-warwick-observatory-dome` is a python module with the common dome code.
 
 See [Software Infrastructure](https://github.com/warwick-one-metre/docs/wiki/Software-Infrastructure) for an overview of the W1m software architecture and instructions for developing and deploying the code.
 

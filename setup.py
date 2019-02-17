@@ -16,11 +16,11 @@
 
 from distutils.core import setup
 
-setup(name='warwick.w1m.dome',
+setup(name='warwick.observatory.dome',
       version='0',
-      packages = ['warwick.w1m.dome'],
+      packages = ['warwick.observatory.dome'],
       author='Paul Chote',
-      description='Common code for the W1m dome daemon',
+      description='Common code for the Warwick observatory dome daemons',
       license='GNU GPLv3',
       author_email='p.chote@warwick.ac.uk',
       url="https://github.com/warwick-one-metre/domed",

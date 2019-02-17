@@ -22,7 +22,7 @@ import os
 import sys
 import Pyro4
 from warwick.observatory.common import daemons
-from warwick.w1m.dome import (
+from warwick.observatory.dome import (
     CommandStatus,
     DomeShutterStatus,
     DomeHeartbeatStatus)

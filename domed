@@ -37,7 +37,7 @@ from warwick.observatory.common import (
     TryLock)
 from warwick.observatory.common.helpers import pyro_client_matches
 
-from warwick.w1m.dome import (
+from warwick.observatory.dome import (
     DomeConfig,
     CommandStatus,
     DomeShutterStatus,
