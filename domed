@@ -95,6 +95,7 @@ class DomeDaemon:
         self._heartbeat_status = DomeHeartbeatStatus.Unavailable
         self._heartbeat_time_remaining = 0
         self._heartbeat_date = datetime.datetime.utcnow()
+        self._heartbeat_siren_enabled = True
 
         if self._config.heartbeat_port:
             heartbeat = threading.Thread(target=self.__monitor_heartbeat)
@@ -317,6 +318,18 @@ class DomeDaemon:
                 log.error(self._config.log_name, 'Failed to send serial command (' \
                           + str(exception) + ')')
 
+        # Sound the siren for 5 seconds before any movement
+        if self._heartbeat_siren_enabled:
+            try:
+                length = self._heartbeat_port.write(bytes([0xFF]))
+                if length != 1:
+                    raise serial.SerialException('Failed to send heartbeat siren command')
+
+                time.sleep(5.)
+            except Exception as exception:
+                log.error(self._config.log_name, 'Failed to send heartbeat serial command (' \
+                          + str(exception) + ')')
+
         while True:
             try:
                 length = self._port.write(command.encode('ascii'))
@@ -528,6 +541,20 @@ class DomeDaemon:
         return CommandStatus.Succeeded if length == 1 else CommandStatus.Failed
 
     @Pyro4.expose
+    def set_heartbeat_siren(self, enabled):
+        """Enable or disable the siren before normal open/close
+           (siren is always enabled for emergency close)
+        """
+        if not pyro_client_matches(self._config.control_ips):
+            return CommandStatus.InvalidControlIP
+
+        if self._engineering_mode:
+            return CommandStatus.EngineeringModeActive
+
+        self._heartbeat_siren_enabled = enabled
+        return CommandStatus.Succeeded
+
+    @Pyro4.expose
     def status(self):
         """Query the latest status."""
         with self._status_lock:
@@ -543,7 +570,8 @@ class DomeDaemon:
                 'engineering_mode': self._engineering_mode,
                 'heartbeat_date': heartbeat_date,
                 'heartbeat_status': self._heartbeat_status,
-                'heartbeat_remaining': self._heartbeat_time_remaining
+                'heartbeat_remaining': self._heartbeat_time_remaining,
+                'heartbeat_siren': self._heartbeat_siren_enabled
             }
 
 if __name__ == '__main__':
