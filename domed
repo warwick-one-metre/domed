@@ -95,6 +95,7 @@ class DomeDaemon:
         self._heartbeat_status = DomeHeartbeatStatus.Unavailable
         self._heartbeat_time_remaining = 0
         self._heartbeat_date = datetime.datetime.utcnow()
+        self._heartbeat_siren_enabled = True
 
         if self._config.heartbeat_port:
             heartbeat = threading.Thread(target=self.__monitor_heartbeat)
@@ -302,7 +303,7 @@ class DomeDaemon:
                 log.error(self._config.log_name, 'Failed to read heartbeat monitor')
                 time.sleep(5.)
 
-    def __move_shutter(self, command, at_requested_limit, step_delay, timeout):
+    def __move_shutter(self, command, at_requested_limit, step_delay, timeout, siren=True):
         """Issues a dome command and blocks until the final state is reached (or timeout)"""
         starttime = datetime.datetime.utcnow()
         step_count = 0
@@ -315,6 +316,18 @@ class DomeDaemon:
                 time.sleep(step_delay)
             except Exception as exception:
                 log.error(self._config.log_name, 'Failed to send serial command (' \
+                          + str(exception) + ')')
+
+        # Sound the siren for 5 seconds before any movement
+        if siren and self._heartbeat_siren_enabled:
+            try:
+                length = self._heartbeat_port.write(bytes([0xFF]))
+                if length != 1:
+                    raise serial.SerialException('Failed to send heartbeat siren command')
+
+                time.sleep(5.)
+            except Exception as exception:
+                log.error(self._config.log_name, 'Failed to send heartbeat serial command (' \
                           + str(exception) + ')')
 
         while True:
@@ -361,7 +374,8 @@ class DomeDaemon:
             at_requested_limit = lambda s: self._east_shutter == DomeShutterStatus.Open \
                 or (steps > 0 and s >= steps)
 
-            success = success and self.__move_shutter('a', at_requested_limit, step_delay, timeout)
+            success = success and self.__move_shutter('a', at_requested_limit, step_delay,
+                                                      timeout, self._config.slow_open_steps == 0)
 
         if west:
             # Open part way using steps
@@ -372,7 +386,8 @@ class DomeDaemon:
 
             at_requested_limit = lambda s: self._west_shutter == DomeShutterStatus.Open \
                 or (steps > 0 and s >= steps)
-            success = success and self.__move_shutter('b', at_requested_limit, step_delay, timeout)
+            success = success and self.__move_shutter('b', at_requested_limit, step_delay,
+                                                      timeout, self._config.slow_open_steps == 0)
         return success
 
     def __close_shutters(self, east, west, steps=0):
@@ -528,6 +543,20 @@ class DomeDaemon:
         return CommandStatus.Succeeded if length == 1 else CommandStatus.Failed
 
     @Pyro4.expose
+    def set_heartbeat_siren(self, enabled):
+        """Enable or disable the siren before normal open/close
+           (siren is always enabled for emergency close)
+        """
+        if not pyro_client_matches(self._config.control_ips):
+            return CommandStatus.InvalidControlIP
+
+        if self._engineering_mode:
+            return CommandStatus.EngineeringModeActive
+
+        self._heartbeat_siren_enabled = enabled
+        return CommandStatus.Succeeded
+
+    @Pyro4.expose
     def status(self):
         """Query the latest status."""
         with self._status_lock:
@@ -543,7 +572,8 @@ class DomeDaemon:
                 'engineering_mode': self._engineering_mode,
                 'heartbeat_date': heartbeat_date,
                 'heartbeat_status': self._heartbeat_status,
-                'heartbeat_remaining': self._heartbeat_time_remaining
+                'heartbeat_remaining': self._heartbeat_time_remaining,
+                'heartbeat_siren': self._heartbeat_siren_enabled
             }
 
 if __name__ == '__main__':

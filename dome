@@ -84,7 +84,8 @@ def print_status():
 
     date = datetime.datetime.strptime(status['date'], '%Y-%m-%dT%H:%M:%SZ')
     heartbeat_date = datetime.datetime.strptime(status['heartbeat_date'], '%Y-%m-%dT%H:%M:%SZ')
-    eng_mode = FMT_RED  + 'ENABLED' if status['engineering_mode'] else FMT_GREEN + 'DISABLED'
+    eng_mode = FMT_RED + 'ENABLED' if status['engineering_mode'] else FMT_GREEN + 'DISABLED'
+    siren = FMT_GREEN + 'ENABLED' if status['heartbeat_siren'] else FMT_RED + 'DISABLED'
 
     sa = SIDE_A[DOME].title()
     sb = SIDE_B[DOME].title()
@@ -94,6 +95,8 @@ def print_status():
     print('     Eng. mode: {}'.format(FMT_BOLD + eng_mode + FMT_CLEAR))
     print('Heartbeat status at: {0}'.format(FMT_BOLD + str(heartbeat_date) + FMT_CLEAR))
     print('       Monitor: ' + DomeHeartbeatStatus.label(status['heartbeat_status']))
+    print('         Siren: ' + FMT_BOLD + siren + FMT_CLEAR)
+
     if status['heartbeat_status'] == 1:
         print('Time remaining: {}'.format(FMT_BOLD + str(status['heartbeat_remaining']) \
               + FMT_CLEAR))
@@ -164,6 +167,19 @@ def engineering_mode(args):
     print('usage: {} engineering (disable|enable)'.format(SCRIPT_NAME))
     return -1
 
+def siren(args):
+    """Enable or disable heartbeat siren"""
+    if args:
+        with DAEMONS[DOME].connect() as dome:
+            if args[0] == 'disable':
+                return dome.set_heartbeat_siren(False)
+
+            if args[0] == 'enable':
+                return dome.set_heartbeat_siren(True)
+
+    print('usage: {} siren (disable|enable)'.format(SCRIPT_NAME))
+    return -1
+
 def print_usage(name):
     """Prints the utility help"""
     print('Usage: {} <command>'.format(name))
@@ -173,6 +189,7 @@ def print_usage(name):
     print('   close         close one or both shutters')
     print('   stop          stop manual open/close command (excludes heartbeat)')
     print('   heartbeat     configure the dome auto-close timeout')
+    print('   siren         configure the dome siren')
     print('   engineering   enable or disable engineering mode')
     print()
 
@@ -192,6 +209,8 @@ if __name__ == '__main__':
         run_command(stop)
     elif sys.argv[1] == 'heartbeat':
         run_command(lambda: heartbeat(sys.argv[2:]))
+    elif sys.argv[1] == 'siren':
+        run_command(lambda: siren(sys.argv[2:]))
     elif sys.argv[1] == 'engineering':
         run_command(lambda: engineering_mode(sys.argv[2:]))
 
