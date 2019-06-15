@@ -4,7 +4,7 @@ _dome()
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
-    opts="status open close stop heartbeat engineering access"
+    opts="status open close stop heartbeat siren engineering"
 
     case "${prev}" in
         open)
@@ -13,10 +13,13 @@ _dome()
         close)
             opts="east west both"
             ;;
-        engineering)
+        heartbeat)
             opts="disable enable"
             ;;
-        heartbeat)
+        siren)
+            opts="disable enable"
+            ;;
+        engineering)
             opts="disable enable"
             ;;
         *)

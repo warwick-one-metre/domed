@@ -304,7 +304,7 @@ class DomeDaemon:
                 log.error(self._config.log_name, 'Failed to read heartbeat monitor')
                 time.sleep(5.)
 
-    def __move_shutter(self, command, at_requested_limit, step_delay, timeout):
+    def __move_shutter(self, command, at_requested_limit, step_delay, timeout, siren=True):
         """Issues a dome command and blocks until the final state is reached (or timeout)"""
         starttime = datetime.datetime.utcnow()
         step_count = 0
@@ -320,7 +320,7 @@ class DomeDaemon:
                           + str(exception) + ')')
 
         # Sound the siren for 5 seconds before any movement
-        if self._heartbeat_siren_enabled:
+        if siren and self._heartbeat_siren_enabled:
             try:
                 length = self._heartbeat_port.write(bytes([0xFF]))
                 if length != 1:
@@ -376,7 +376,8 @@ class DomeDaemon:
             def at_east_requested_limit(s):
                 return self._east_shutter == DomeShutterStatus.Open or 0 < steps <= s
 
-            success = success and self.__move_shutter('a', at_east_requested_limit, step_delay, timeout)
+            success = success and self.__move_shutter('a', at_east_requested_limit, step_delay,
+                                                      timeout, self._config.slow_open_steps == 0)
 
         if west:
             # Open part way using steps
@@ -390,7 +391,8 @@ class DomeDaemon:
             def at_west_requested_limit(s):
                 return self._west_shutter == DomeShutterStatus.Open or 0 < steps <= s
 
-            success = success and self.__move_shutter('b', at_west_requested_limit, step_delay, timeout)
+            success = success and self.__move_shutter('b', at_west_requested_limit, step_delay,
+                                                      timeout, self._config.slow_open_steps == 0)
         return success
 
     def __close_shutters(self, east, west, steps=0):
