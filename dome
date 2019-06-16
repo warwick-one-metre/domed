@@ -27,6 +27,13 @@ from warwick.observatory.dome import (
     DomeShutterStatus,
     DomeHeartbeatStatus)
 
+# Fix terminal coloring on Windows clients
+try:
+    import colorama
+    colorama.init()
+except ImportError:
+    pass
+
 # Set to the appropriate dome from the Makefile
 DOME = 'onemetre'
 
