@@ -81,8 +81,8 @@ class DomeDaemon:
 
         self._status_lock = threading.Lock()
         self._status_time = None
-        self._east_shutter = DomeShutterStatus.Closed
-        self._west_shutter = DomeShutterStatus.Closed
+        self._shutter_a = DomeShutterStatus.Closed
+        self._shutter_b = DomeShutterStatus.Closed
 
         self._command_lock = threading.Lock()
         self._force_stopped = False
@@ -168,49 +168,49 @@ class DomeDaemon:
 
     def __parse_status(self, status):
         if status == ord('0'):
-            self._east_shutter = DomeShutterStatus.Closed
-            self._west_shutter = DomeShutterStatus.Closed
+            self._shutter_a = DomeShutterStatus.Closed
+            self._shutter_b = DomeShutterStatus.Closed
         elif status == ord('1'):
-            self._east_shutter = DomeShutterStatus.Closed
-            if self._west_shutter != DomeShutterStatus.Open:
-                self._west_shutter = DomeShutterStatus.PartiallyOpen
+            self._shutter_a = DomeShutterStatus.Closed
+            if self._shutter_b != DomeShutterStatus.Open:
+                self._shutter_b = DomeShutterStatus.PartiallyOpen
         elif status == ord('2'):
-            if self._east_shutter != DomeShutterStatus.Open:
-                self._east_shutter = DomeShutterStatus.PartiallyOpen
-            self._west_shutter = DomeShutterStatus.Closed
+            if self._shutter_a != DomeShutterStatus.Open:
+                self._shutter_a = DomeShutterStatus.PartiallyOpen
+            self._shutter_b = DomeShutterStatus.Closed
         elif status == ord('3'):
-            if self._east_shutter != DomeShutterStatus.Open:
-                self._east_shutter = DomeShutterStatus.PartiallyOpen
-            if self._west_shutter != DomeShutterStatus.Open:
-                self._west_shutter = DomeShutterStatus.PartiallyOpen
+            if self._shutter_a != DomeShutterStatus.Open:
+                self._shutter_a = DomeShutterStatus.PartiallyOpen
+            if self._shutter_b != DomeShutterStatus.Open:
+                self._shutter_b = DomeShutterStatus.PartiallyOpen
         elif status == ord('A'):
             if self._config.legacy_controller:
-                self._east_shutter = DomeShutterStatus.PartiallyOpen
+                self._shutter_a = DomeShutterStatus.PartiallyOpen
             else:
-                self._east_shutter = DomeShutterStatus.Closing
+                self._shutter_a = DomeShutterStatus.Closing
         elif status == ord('a'):
             if self._config.legacy_controller:
-                self._east_shutter = DomeShutterStatus.PartiallyOpen
+                self._shutter_a = DomeShutterStatus.PartiallyOpen
             else:
-                self._east_shutter = DomeShutterStatus.Opening
+                self._shutter_a = DomeShutterStatus.Opening
         elif status == ord('X'):
-            self._east_shutter = DomeShutterStatus.Closed
+            self._shutter_a = DomeShutterStatus.Closed
         elif status == ord('x'):
-            self._east_shutter = DomeShutterStatus.Open
+            self._shutter_a = DomeShutterStatus.Open
         elif status == ord('B'):
             if self._config.legacy_controller:
-                self._west_shutter = DomeShutterStatus.PartiallyOpen
+                self._shutter_b = DomeShutterStatus.PartiallyOpen
             else:
-                self._west_shutter = DomeShutterStatus.Closing
+                self._shutter_b = DomeShutterStatus.Closing
         elif status == ord('b'):
             if self._config.legacy_controller:
-                self._west_shutter = DomeShutterStatus.PartiallyOpen
+                self._shutter_b = DomeShutterStatus.PartiallyOpen
             else:
-                self._west_shutter = DomeShutterStatus.Opening
+                self._shutter_b = DomeShutterStatus.Opening
         elif status == ord('Y'):
-            self._west_shutter = DomeShutterStatus.Closed
+            self._shutter_b = DomeShutterStatus.Closed
         elif status == ord('y'):
-            self._west_shutter = DomeShutterStatus.Open
+            self._shutter_b = DomeShutterStatus.Open
         elif status == ord('R'):
             print('Bumper guard relay reset')
             log.error(self._config.log_name, 'Bumper guard relay reset')
@@ -263,8 +263,8 @@ class DomeDaemon:
                                 log.error(self._config.log_name,
                                           'Heartbeat monitor is closing dome')
                             self._heartbeat_status = DomeHeartbeatStatus.TrippedClosing
-                            self._east_shutter = DomeShutterStatus.HeartbeatMonitorForceClosing
-                            self._west_shutter = DomeShutterStatus.HeartbeatMonitorForceClosing
+                            self._shutter_a = DomeShutterStatus.HeartbeatMonitorForceClosing
+                            self._shutter_b = DomeShutterStatus.HeartbeatMonitorForceClosing
                             self._status_time = datetime.datetime.utcnow()
                         elif status == 255:
                             if self._heartbeat_status != DomeHeartbeatStatus.TrippedIdle:
@@ -351,84 +351,14 @@ class DomeDaemon:
 
         return not self._force_stopped and not heartbeat_tripped and at_limit
 
-    def __open_shutters(self, east, west, steps=0):
-        """Open the requested shutters"""
-        success = True
-
-        # If moving a fixed number of steps then we must wait for the shutters
-        # to stop moving between each step command to ensure the step size is constant
-        step_delay = self._config.step_command_delay_seconds if steps > 0 \
-            else self._config.command_delay_seconds
-
-        # If moving a fixed number of steps then the timeout is implicit
-        # (step_command_delay_seconds * steps)
-        timeout = 0 if steps > 0 else self._config.shutter_timeout_seconds
-
-        # TODO: Check the wind direction and open the downwind shutter first
-        if east:
-            # Open part way using steps
-            if steps == 0 and self._config.slow_open_steps > 0:
-                def at_east_step_limit(s):
-                    return self._east_shutter == DomeShutterStatus.Open or s >= self._config.slow_open_steps
-
-                slow_delay = self._config.step_command_delay_seconds
-                success = success and self.__move_shutter('a', at_east_step_limit, slow_delay, 0)
-
-            def at_east_requested_limit(s):
-                return self._east_shutter == DomeShutterStatus.Open or 0 < steps <= s
-
-            success = success and self.__move_shutter('a', at_east_requested_limit, step_delay,
-                                                      timeout, self._config.slow_open_steps == 0)
-
-        if west:
-            # Open part way using steps
-            if steps == 0 and self._config.slow_open_steps > 0:
-                def at_west_step_limit(s):
-                    return self._west_shutter == DomeShutterStatus.Open or s >= self._config.slow_open_steps
-
-                slow_delay = self._config.step_command_delay_seconds
-                success = success and self.__move_shutter('b', at_west_step_limit, slow_delay, 0)
-
-            def at_west_requested_limit(s):
-                return self._west_shutter == DomeShutterStatus.Open or 0 < steps <= s
-
-            success = success and self.__move_shutter('b', at_west_requested_limit, step_delay,
-                                                      timeout, self._config.slow_open_steps == 0)
-        return success
-
-    def __close_shutters(self, east, west, steps=0):
-        """Close the requested shutters"""
-        success = True
-
-        # If moving a fixed number of steps then we must wait for the shutters
-        # to stop moving between each step command to ensure the step size is constant
-        step_delay = self._config.step_command_delay_seconds if steps > 0 \
-            else self._config.command_delay_seconds
-
-        # If moving a fixed number of steps then the timeout is implicit
-        # (step_command_delay_seconds * steps)
-        timeout = 0 if steps > 0 else self._config.shutter_timeout_seconds
-
-        # TODO: Check the wind direction and close the upwind shutter first
-        if west:
-            def at_west_requested_limit(s):
-                return self._west_shutter == DomeShutterStatus.Closed or 0 < steps <= s
-
-            success = success and self.__move_shutter('B', at_west_requested_limit, step_delay, timeout)
-
-        if east:
-            def at_east_requested_limit(s):
-                return self._east_shutter == DomeShutterStatus.Closed or 0 < steps <= s
-
-            success = success and self.__move_shutter('A', at_east_requested_limit, step_delay, timeout)
-
-        return success
-
     @Pyro4.expose
-    def open_shutters(self, east=False, west=False, steps=0):
-        """Opens the requested shutter.
-           Returns once the requested shutters reach their limits or the command times out.
-           If steps is greater than zero then open the defined number of steps with longer delay"""
+    def open_shutters(self, sides, steps=0):
+        """
+        Open one or both dome shutters, optionally by a limited number of steps
+        :param sides: string containing 'a' and/or 'b' defining the sides and order
+        :param steps: Number of steps to move, or full open/close if 0
+        :return: CommandStatus indicating success or error code
+        """
         if not pyro_client_matches(self._config.control_ips):
             return CommandStatus.InvalidControlIP
 
@@ -445,13 +375,44 @@ class DomeDaemon:
             if not success:
                 return CommandStatus.Blocked
 
-            if east and west:
+            sides = sides.lower()
+            if 'a' in sides and 'b' in sides:
                 log.info(self._config.log_name, 'Opening both shutters')
             else:
-                shutter = 'east' if east else 'west'
+                shutter = 'east' if 'a' in sides else 'west'
                 log.info(self._config.log_name, 'Opening ' + shutter + ' shutter')
 
-            if not self.__open_shutters(east, west, steps):
+            success = True
+
+            # If moving a fixed number of steps then we must wait for the shutters
+            # to stop moving between each step command to ensure the step size is constant
+            step_delay = self._config.step_command_delay_seconds if steps > 0 \
+                else self._config.command_delay_seconds
+
+            # If moving a fixed number of steps then the timeout is implicit
+            # (step_command_delay_seconds * steps)
+            timeout = 0 if steps > 0 else self._config.shutter_timeout_seconds
+
+            # pylint: disable=cell-var-from-loop
+            for side in sides:
+                # Open part way using steps
+                if steps == 0 and self._config.slow_open_steps > 0:
+                    def at_step_limit(s):
+                        status = self._shutter_a if side == 'a' else self._shutter_b
+                        return status == DomeShutterStatus.Open or s >= self._config.slow_open_steps
+
+                    slow_delay = self._config.step_command_delay_seconds
+                    success = success and self.__move_shutter(side, at_step_limit, slow_delay, 0)
+
+                def at_requested_limit(s):
+                    status = self._shutter_a if side == 'a' else self._shutter_b
+                    return status == DomeShutterStatus.Open or 0 < steps <= s
+
+                success = success and self.__move_shutter(side, at_requested_limit, step_delay,
+                                                          timeout, self._config.slow_open_steps == 0)
+            # pylint: enable=cell-var-from-loop
+
+            if not success:
                 log.error(self._config.log_name, 'Failed to open dome')
                 return CommandStatus.Failed
 
@@ -459,9 +420,13 @@ class DomeDaemon:
             return CommandStatus.Succeeded
 
     @Pyro4.expose
-    def close_shutters(self, east=False, west=False, steps=0):
-        """Closes the requested shutter.
-           Returns once the requested shutters reach their limits or the command times out."""
+    def close_shutters(self, sides, steps=0):
+        """
+        Close one or both dome shutters, optionally by a limited number of steps
+        :param sides: string containing 'a' and/or 'b' defining the sides and order
+        :param steps: Number of steps to move, or full open/close if 0
+        :return: CommandStatus indicating success or error code
+        """
         if self._engineering_mode:
             return CommandStatus.EngineeringModeActive
 
@@ -475,13 +440,34 @@ class DomeDaemon:
             if not success:
                 return CommandStatus.Blocked
 
-            if east and west:
+            sides = sides.upper()
+            if 'A' in sides and 'B' in sides:
                 log.info(self._config.log_name, 'Closing both shutters')
             else:
-                shutter = 'east' if east else 'west'
+                shutter = 'east' if 'A' in sides else 'west'
                 log.info(self._config.log_name, 'Closing ' + shutter + ' shutter')
 
-            if not self.__close_shutters(east, west, steps):
+            success = True
+
+            # If moving a fixed number of steps then we must wait for the shutters
+            # to stop moving between each step command to ensure the step size is constant
+            step_delay = self._config.step_command_delay_seconds if steps > 0 \
+                else self._config.command_delay_seconds
+
+            # If moving a fixed number of steps then the timeout is implicit
+            # (step_command_delay_seconds * steps)
+            timeout = 0 if steps > 0 else self._config.shutter_timeout_seconds
+
+            # pylint: disable=cell-var-from-loop
+            for side in sides:
+                def at_requested_limit(s):
+                    status = self._shutter_a if side == 'A' else self._shutter_b
+                    return status == DomeShutterStatus.Closed or 0 < steps <= s
+
+                success = success and self.__move_shutter(side, at_requested_limit, step_delay, timeout)
+            # pylint: enable=cell-var-from-loop
+
+            if not success:
                 log.error(self._config.log_name, 'Failed to close dome')
                 return CommandStatus.Failed
 
@@ -570,13 +556,13 @@ class DomeDaemon:
         with self._status_lock:
             date = self._status_time.strftime('%Y-%m-%dT%H:%M:%SZ')
             heartbeat_date = self._heartbeat_date.strftime('%Y-%m-%dT%H:%M:%SZ')
-            closed = self._east_shutter == DomeShutterStatus.Closed and \
-                self._west_shutter == DomeShutterStatus.Closed
+            closed = self._shutter_a == DomeShutterStatus.Closed and \
+                self._shutter_b == DomeShutterStatus.Closed
 
             return {
                 'date': date,
-                'east_shutter': self._east_shutter,
-                'west_shutter': self._west_shutter,
+                'shutter_a': self._shutter_a,
+                'shutter_b': self._shutter_b,
                 'closed': closed,
                 'engineering_mode': self._engineering_mode,
                 'heartbeat_date': heartbeat_date,

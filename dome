@@ -46,16 +46,29 @@ DAEMONS = {
     'nites': daemons.nites_dome,
 }
 
-SIDE_A = {
-    'onemetre': 'east',
-    'rasa': 'south',
-    'nites': 'south',
+SIDES = {
+    'onemetre': {
+        'east': 'a',
+        'west': 'b',
+        'both': 'ab'
+    },
+    'rasa': {
+        'south': 'a',
+        'north': 'b',
+        'both': 'ab'
+    },
+    'nites': {
+        'south': 'b',
+        'north': 'a',
+        'both': 'ba'
+    }
 }
 
-SIDE_B = {
-    'onemetre': 'west',
-    'rasa': 'north',
-    'nites': 'north',
+
+SIDE_LABELS = {
+    'onemetre': {'a': ' East', 'b': ' West'},
+    'rasa': {'a': 'South', 'b': 'North'},
+    'nites': {'a': 'North', 'b': 'South'}
 }
 
 
@@ -90,8 +103,8 @@ def print_status():
     siren_mode = FMT_GREEN + 'ENABLED' if status['heartbeat_siren'] else FMT_RED + 'DISABLED'
 
     print('Dome status at: {0}'.format(FMT_BOLD + str(date) + FMT_CLEAR))
-    print('  {} shutter: {}'.format(SIDE_A[DOME].title(), DomeShutterStatus.label(status['east_shutter'])))
-    print('  {} shutter: {}'.format(SIDE_B[DOME].title(), DomeShutterStatus.label(status['west_shutter'])))
+    print(' {} shutter: {}'.format(SIDE_LABELS[DOME]['a'], DomeShutterStatus.label(status['shutter_a'])))
+    print(' {} shutter: {}'.format(SIDE_LABELS[DOME]['b'], DomeShutterStatus.label(status['shutter_b'])))
     print('     Eng. mode: {}'.format(FMT_BOLD + eng_mode + FMT_CLEAR))
     print('Heartbeat status at: {0}'.format(FMT_BOLD + str(heartbeat_date) + FMT_CLEAR))
     print('       Monitor: ' + DomeHeartbeatStatus.label(status['heartbeat_status']))
@@ -113,14 +126,10 @@ def open_dome(args):
     if args:
         steps = int(args[1]) if len(args) > 1 else 0
         with DAEMONS[DOME].connect(timeout=0) as dome:
-            if args[0] == SIDE_A[DOME]:
-                return dome.open_shutters(east=True, steps=steps)
-            if args[0] == SIDE_B[DOME]:
-                return dome.open_shutters(west=True, steps=steps)
-            if args[0] == 'both':
-                return dome.open_shutters(east=True, west=True, steps=steps)
+            if args[0] in SIDES[DOME]:
+                return dome.open_shutters(SIDES[DOME][args[0]], steps=steps)
 
-    print('usage: {} open ({}|{}|both) [<steps>]'.format(SCRIPT_NAME, SIDE_A[DOME], SIDE_B[DOME]))
+    print('usage: {} open ({}) [<steps>]'.format(SCRIPT_NAME, '|'.join(SIDES[DOME])))
     return -1
 
 
@@ -129,14 +138,11 @@ def close_dome(args):
     if args:
         steps = int(args[1]) if len(args) > 1 else 0
         with DAEMONS[DOME].connect(timeout=0) as dome:
-            if args[0] == SIDE_A[DOME]:
-                return dome.close_shutters(east=True, steps=steps)
-            if args[0] == SIDE_B[DOME]:
-                return dome.close_shutters(west=True, steps=steps)
-            if args[0] == 'both':
-                return dome.close_shutters(east=True, west=True, steps=steps)
+            if args[0] in SIDES[DOME]:
+                # Reverse the shutter order when closing
+                return dome.close_shutters(SIDES[DOME][args[0]][::-1], steps=steps)
 
-    print('usage: {} close ({}|{}|both) [<steps>]'.format(SCRIPT_NAME, SIDE_A[DOME], SIDE_B[DOME]))
+    print('usage: {} close ({}) [<steps>]'.format(SCRIPT_NAME, '|'.join(SIDES[DOME])))
     return -1
 
 
