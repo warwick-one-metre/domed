@@ -306,8 +306,6 @@ class DomeDaemon:
 
     def __move_shutter(self, command, at_requested_limit, step_delay, timeout, siren=True):
         """Issues a dome command and blocks until the final state is reached (or timeout)"""
-        starttime = datetime.datetime.utcnow()
-        step_count = 0
 
         if self._config.has_bumper_guard:
             try:
@@ -331,6 +329,9 @@ class DomeDaemon:
                 log.error(self._config.log_name, 'Failed to send heartbeat serial command (' \
                           + str(exception) + ')')
 
+        step_count = 0
+        start_time = datetime.datetime.utcnow()
+
         while True:
             try:
                 length = self._port.write(command.encode('ascii'))
@@ -341,7 +342,7 @@ class DomeDaemon:
                 log.error(self._config.log_name, 'Failed to send serial command (' \
                           + str(exception) + ')')
             time.sleep(step_delay)
-            runtime = (datetime.datetime.utcnow() - starttime).total_seconds()
+            runtime = (datetime.datetime.utcnow() - start_time).total_seconds()
             heartbeat_tripped = self._heartbeat_status == DomeHeartbeatStatus.TrippedClosing or \
                 self._heartbeat_status == DomeHeartbeatStatus.TrippedIdle
             at_limit = at_requested_limit(step_count)
