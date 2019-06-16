@@ -149,7 +149,7 @@ class DomeDaemon:
                             # Legacy controllers only send data in response to a move command
                             continue
                         else:
-                            raise serial.SerialTimeoutException('Read timeout')
+                            raise serial.SerialTimeoutException('Dome serial read timeout')
 
                     with self._status_lock:
                         self.__parse_status(data[0])
@@ -253,7 +253,7 @@ class DomeDaemon:
                 while True:
                     data = self._heartbeat_port.read(1)
                     if not data:
-                        raise serial.SerialTimeoutException('Read timeout')
+                        raise serial.SerialTimeoutException('Heartbeat serial read timeout')
 
                     status = data[-1]
                     with self._status_lock:
