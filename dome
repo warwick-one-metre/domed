@@ -67,7 +67,7 @@ SIDES = {
     'nites': {
         'south': 'b',
         'north': 'a',
-        'both': 'ba'
+        'both': 'ab'
     }
 }
 
@@ -78,6 +78,11 @@ SIDE_LABELS = {
     'nites': {'a': 'North', 'b': 'South'}
 }
 
+INVERT_ON_CLOSE = {
+    'onemetre': True,
+    'rasa': True,
+    'nites': False
+}
 
 def run_command(command):
     """Prints the message associated with a status code and returns the code"""
@@ -146,8 +151,13 @@ def close_dome(args):
         steps = int(args[1]) if len(args) > 1 else 0
         with DAEMONS[DOME].connect(timeout=0) as dome:
             if args[0] in SIDES[DOME]:
+                sides = SIDES[DOME][args[0]]
+
                 # Reverse the shutter order when closing
-                return dome.close_shutters(SIDES[DOME][args[0]][::-1], steps=steps)
+                if INVERT_ON_CLOSE[DOME]:
+                    sides = sides[::-1]
+
+                return dome.close_shutters(sides, steps=steps)
 
     print('usage: {} close ({}) [<steps>]'.format(SCRIPT_NAME, '|'.join(SIDES[DOME])))
     return -1
