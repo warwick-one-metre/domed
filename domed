@@ -64,11 +64,11 @@ DOME_CONFIG = {
     'nites': DomeConfig('nites_dome',
                         daemons.nites_dome,
                         [IP.NitesMain],
-                        serial_port='COM8',
-                        serial_timeout_seconds=0.5,
-                        shutter_timeout_seconds=10.5,
-                        legacy_controller=True,
-                        heartbeat_port='COM9')
+                        shutter_timeout_seconds=19,
+                        command_delay_seconds=0.25,
+                        step_command_delay_seconds=2,
+                        serial_port='COM3',
+                        heartbeat_port='COM4')
 }
 
 
