@@ -427,6 +427,9 @@ class DomeDaemon:
         :param steps: Number of steps to move, or full open/close if 0
         :return: CommandStatus indicating success or error code
         """
+        if not pyro_client_matches(self._config.control_ips):
+            return CommandStatus.InvalidControlIP
+
         if self._engineering_mode:
             return CommandStatus.EngineeringModeActive
 
