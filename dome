@@ -129,7 +129,7 @@ def print_status():
 
 def stop():
     """Stops any active dome movement"""
-    with daemons.rasa_dome.connect() as dome:
+    with DAEMONS[DOME].connect() as dome:
         return dome.stop()
 
 
