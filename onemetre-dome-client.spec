@@ -1,12 +1,12 @@
 Name:      onemetre-dome-client
-Version:   2.4.1
+Version:   2.4.2
 Release:   0
 Url:       https://github.com/warwick-one-metre/domed
 Summary:   Dome client for the Warwick one-metre telescope.
 License:   GPL-3.0
 Group:     Unspecified
 BuildArch: noarch
-Requires:  python36, python36-Pyro4, python36-warwick-observatory-common, python36-warwick-observatory-dome
+Requires:  python3, python3-Pyro4, python3-warwick-observatory-common, python3-warwick-observatory-dome
 
 %description
 Part of the observatory software for the Warwick one-meter telescope.

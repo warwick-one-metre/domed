@@ -1,5 +1,5 @@
-Name:           python36-warwick-observatory-dome
-Version:        2.2.0
+Name:           python3-warwick-observatory-dome
+Version:        2.2.1
 Release:        0
 License:        GPL3
 Summary:        Common backend code for the Warwick one-metre telescope dome daemon

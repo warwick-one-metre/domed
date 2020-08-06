@@ -13,7 +13,7 @@ all:
 	${RPMBUILD} -ba onemetre-dome-client.spec
 	awk '{sub("DOME = .*$$","DOME = \"rasa\""); print $0}' dome.bak > dome
 	${RPMBUILD} -ba rasa-dome-client.spec
-	${RPMBUILD} -ba python36-warwick-observatory-dome.spec
+	${RPMBUILD} -ba python3-warwick-observatory-dome.spec
 	mv build/noarch/*.rpm .
 	mv dome.bak dome
 	rm -rf build
